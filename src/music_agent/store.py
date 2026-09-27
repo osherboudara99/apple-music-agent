@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -109,6 +110,53 @@ class Store:
                 conn.execute("ROLLBACK")
                 raise
             conn.execute("COMMIT")
+
+    def append_messages(self, chat_id: str, messages: list[dict], at: datetime) -> None:
+        with self.transaction() as conn:
+            conn.executemany(
+                "INSERT INTO conversations (chat_id, role, content_json, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                [
+                    (chat_id, m["role"], json.dumps(m, ensure_ascii=False), to_iso(at))
+                    for m in messages
+                ],
+            )
+
+    def load_messages(self, chat_id: str) -> list[tuple[dict, datetime]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT content_json, created_at FROM conversations "
+                "WHERE chat_id = ? ORDER BY id",
+                (chat_id,),
+            ).fetchall()
+        return [(json.loads(r["content_json"]), from_iso(r["created_at"])) for r in rows]
+
+    def clear_messages(self, chat_id: str) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM conversations WHERE chat_id = ?", (chat_id,))
+
+    def record_usage(
+        self,
+        at: datetime,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cache_read_tokens: int,
+        cost_usd: float,
+    ) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                "INSERT INTO usage (at, model, input_tokens, output_tokens, cache_read_tokens, "
+                "cost_usd) VALUES (?, ?, ?, ?, ?, ?)",
+                (to_iso(at), model, input_tokens, output_tokens, cache_read_tokens, cost_usd),
+            )
+
+    def spend_since(self, since: datetime) -> float:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0) FROM usage WHERE at >= ?", (to_iso(since),)
+            ).fetchone()
+        return float(row[0])
 
 
 def _row_to_track(row: sqlite3.Row) -> Track:
