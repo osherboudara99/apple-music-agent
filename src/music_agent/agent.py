@@ -147,6 +147,7 @@ class Agent:
             )
         history = self._history(chat_id, now)
         new: list[dict] = [{"role": "user", "content": text}]
+        created: list[dict] = []  # playlists made this turn, reported if the turn fails later
         try:
             for _ in range(MAX_TOOL_ROUNDS):
                 response = self.client.messages.create(
@@ -172,6 +173,8 @@ class Agent:
                     if block.type != "tool_use":
                         continue
                     output = self.toolbox.run(block.name, block.input)
+                    if block.name == "create_playlist" and "error" not in output:
+                        created.append(output)
                     result = {
                         "type": "tool_result",
                         "tool_use_id": block.id,
@@ -181,13 +184,31 @@ class Agent:
                         result["is_error"] = True
                     results.append(result)
                 new.append({"role": "user", "content": results})
-            return TOO_MANY_STEPS_MSG
+            return self._failed_turn(chat_id, text, created, now, TOO_MANY_STEPS_MSG)
         except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
             request_id = None
             if isinstance(exc, anthropic.APIStatusError):
                 request_id = exc.response.headers.get("request-id")
             log.warning("Claude API error (request-id %s): %s", request_id, exc)
-            return API_ERROR_MSG
+            return self._failed_turn(chat_id, text, created, now, API_ERROR_MSG)
+
+    def _failed_turn(
+        self, chat_id: str, text: str, created: list[dict], now: datetime, message: str
+    ) -> str:
+        """Save nothing half-finished; but if playlists were made, say so and remember it."""
+        if not created:
+            return message
+        made = ", ".join(f'"{p["name"]}" ({p.get("track_count", "?")} tracks)' for p in created)
+        note = f"Before that happened I created the playlist {made}."
+        self.store.append_messages(
+            chat_id,
+            [
+                {"role": "user", "content": text},
+                {"role": "assistant", "content": [{"type": "text", "text": note}]},
+            ],
+            now,
+        )
+        return f"{message} {note}"
 
     @staticmethod
     def _final_text(response) -> str:

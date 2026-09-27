@@ -291,3 +291,44 @@ def test_truncated_tool_call_is_not_saved_and_chat_keeps_working(store):
 
 def test_max_tokens_is_generous():
     assert ag.MAX_TOKENS >= 16000
+
+
+def test_failure_after_playlist_created_is_reported_and_remembered(store):
+    toolbox = StubToolbox({"create_playlist": {"name": "Rock week", "track_count": 17}})
+    error = anthropic.APIConnectionError(
+        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    )
+    agent, client = make_agent(
+        store,
+        [
+            msg([tool_use("toolu_1", "create_playlist", {"name": "Rock week", "track_ids": ["A"]})],
+                "tool_use"),
+            error,
+            msg([text("ok")]),
+        ],
+        toolbox,
+    )
+    reply = agent.respond("cli", "make a rock playlist")
+    assert reply.startswith(ag.API_ERROR_MSG)
+    assert '"Rock week"' in reply and "17 tracks" in reply
+    saved = [m for m, _ in store.load_messages("cli")]
+    assert [m["role"] for m in saved] == ["user", "assistant"]
+    assert "Rock week" in saved[1]["content"][0]["text"]
+    agent.respond("cli", "try again")
+    sent = client.messages.calls[2]["messages"]
+    assert [m["role"] for m in sent] == ["user", "assistant", "user"]
+
+
+def test_failed_playlist_tool_is_not_reported_as_created(store):
+    toolbox = StubToolbox({"create_playlist": {"error": "None of these tracks are in the library."}})
+    error = anthropic.APIConnectionError(
+        request=httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    )
+    agent, _ = make_agent(
+        store,
+        [msg([tool_use("toolu_1", "create_playlist", {"name": "x", "track_ids": ["Z"]})],
+             "tool_use"), error],
+        toolbox,
+    )
+    assert agent.respond("cli", "q") == ag.API_ERROR_MSG
+    assert store.load_messages("cli") == []
