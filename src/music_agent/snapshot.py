@@ -23,7 +23,11 @@ class DiffResult:
 
 
 def diff(
-    stored: dict[str, Track], live: list[Track], prev_snapshot_at: datetime | None, now: datetime
+    stored: dict[str, Track],
+    live: list[Track],
+    prev_snapshot_at: datetime | None,
+    now: datetime,
+    last_seen: dict[str, datetime] | None = None,
 ) -> DiffResult:
     events: list[PlayEvent] = []
     warnings: list[str] = []
@@ -66,12 +70,16 @@ def diff(
         # Never back-date: if played_date didn't advance, the plays still happened since
         # the last snapshot, so date them "now" within that window.
         played_at = track.played_date if exact else now
+        # The uncertain plays happened after this track was last seen (it may have been
+        # missing from partial reads since), and never after the play that bounds them.
+        seen = (last_seen or {}).get(track.persistent_id) or prev_snapshot_at
+        window_start = min(seen, played_at)
         if exact:
             events.append(PlayEvent(track.persistent_id, played_at, None, now, False))
         else:
-            events.append(PlayEvent(track.persistent_id, played_at, prev_snapshot_at, now, True))
+            events.append(PlayEvent(track.persistent_id, played_at, window_start, now, True))
         for _ in range(delta - 1):
-            events.append(PlayEvent(track.persistent_id, played_at, prev_snapshot_at, now, True))
+            events.append(PlayEvent(track.persistent_id, played_at, window_start, now, True))
     removed = sorted(set(stored) - live_ids)
     return DiffResult(events, removed, warnings, baseline)
 
@@ -115,7 +123,7 @@ def run_snapshot(
             log.error("snapshot failed: %s", error)
             return SnapshotResult(now, 0, 0, False, [], error=error)
         prev = st.last_snapshot_at(conn)
-        result = diff(stored, live, prev, now)
+        result = diff(stored, live, prev, now, st.load_last_seen(conn))
         st.upsert_tracks(conn, result.baseline, now)
         st.mark_removed(conn, result.removed_ids, now)
         st.insert_plays(conn, result.events)

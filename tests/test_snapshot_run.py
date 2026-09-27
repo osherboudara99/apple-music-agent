@@ -143,3 +143,22 @@ def test_returning_track_with_lower_count_is_not_phantom(store):
     run_snapshot(store, lambda: [make_track("A", played_count=0), b], clock)
     run_snapshot(store, lambda: [make_track("A", played_count=9), b], clock)
     assert plays(store) == 0
+
+
+def test_returning_track_windows_start_when_it_was_last_seen(store):
+    clock = ticking_clock()
+    b = make_track("B")
+    run_snapshot(store, lambda: [make_track("A", played_count=5), b], clock)  # 18:00, A seen
+    run_snapshot(store, lambda: [b], clock)  # 18:01, A missing
+    run_snapshot(store, lambda: [b], clock)  # 18:02, A missing
+    back = make_track("A", played_count=8, played_date=dt("2026-09-27T18:00:40"))
+    run_snapshot(store, lambda: [back, b], clock)  # 18:03
+    with store.connect() as conn:
+        rows = conn.execute(
+            "SELECT played_at, window_start, approx FROM plays ORDER BY id"
+        ).fetchall()
+    assert len(rows) == 3
+    for r in rows:
+        if r["approx"]:
+            assert r["window_start"] == "2026-09-27T18:00:00+00:00"  # A's last sighting
+            assert r["window_start"] <= r["played_at"]

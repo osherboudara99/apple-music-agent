@@ -91,3 +91,15 @@ def test_baseline_is_live_data_otherwise():
     new = make_track("A", played_count=6, played_date=dt("2026-09-27T18:04:00"))
     old = make_track("A", played_count=5)
     assert diff({"A": old}, [new], PREV, NOW).baseline == [new]
+
+
+def test_window_start_uses_last_seen_and_never_follows_the_play():
+    old = make_track("A", played_count=5, played_date=dt("2026-09-27T10:00:00"))
+    new = make_track("A", played_count=7, played_date=dt("2026-09-27T12:00:00"))
+    last_seen = {"A": dt("2026-09-27T11:00:00")}
+    events = diff({"A": old}, [new], PREV, NOW, last_seen).events
+    assert events[1].window_start == dt("2026-09-27T11:00:00")
+    late = {"A": dt("2026-09-27T13:00:00")}  # clock skew: seen after the reported play
+    assert diff({"A": old}, [new], PREV, NOW, late).events[1].window_start == dt(
+        "2026-09-27T12:00:00"
+    )

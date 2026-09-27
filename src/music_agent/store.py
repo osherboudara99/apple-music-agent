@@ -178,6 +178,12 @@ def load_active_tracks(conn: sqlite3.Connection) -> dict[str, Track]:
     return {row["persistent_id"]: _row_to_track(row) for row in rows}
 
 
+def load_last_seen(conn: sqlite3.Connection) -> dict[str, datetime]:
+    """When each track was last present in a successful library read."""
+    rows = conn.execute("SELECT persistent_id, last_seen_at FROM tracks")
+    return {r["persistent_id"]: from_iso(r["last_seen_at"]) for r in rows}
+
+
 def load_all_tracks(conn: sqlite3.Connection) -> dict[str, Track]:
     """Every track ever seen, including removed ones (so a returning track keeps its counts)."""
     rows = conn.execute("SELECT * FROM tracks")
