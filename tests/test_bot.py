@@ -98,3 +98,19 @@ def test_run_bot_requires_token(isolated_home, capsys):
     code = bot.run_bot(Config(timezone="UTC"), Store(isolated_home / "plays.db"))
     assert code == 2
     assert "Telegram is optional" in capsys.readouterr().err
+
+
+def test_unexpected_agent_error_gets_a_reply():
+    class Broken(StubAgent):
+        def respond(self, chat_id, text):
+            raise RuntimeError("database is locked")
+
+    assert "Something went wrong" in logic(Broken()).handle(42, 100, "q")[0]
+
+
+def test_unexpected_status_error_gets_a_reply():
+    def broken_status():
+        raise RuntimeError("boom")
+
+    bot_logic = bot.BotLogic(StubAgent(), 42, broken_status)
+    assert "Something went wrong" in bot_logic.handle(42, 100, "/status")[0]

@@ -25,6 +25,7 @@ HELP_TEXT = (
     '"make a playlist of the rock I played this week".\n'
     "/new starts a fresh conversation, /status shows recording status and spend."
 )
+UNEXPECTED_MSG = "Something went wrong on my side; details are in the log. Try again."
 NO_TELEGRAM_MSG = (
     "Telegram is optional and not set up. To use it: create a bot with @BotFather, then run\n"
     "  uv run keyring set music-agent telegram_bot_token\n"
@@ -76,9 +77,13 @@ class BotLogic:
         if command == "/new":
             self.agent.reset(conversation)
             return ["Started a new conversation."]
-        if command == "/status":
-            return split_message(self.status_text())
-        return split_message(self.agent.respond(conversation, text))
+        try:
+            if command == "/status":
+                return split_message(self.status_text())
+            return split_message(self.agent.respond(conversation, text))
+        except Exception:
+            log.exception("Telegram message from %s failed", user_id)
+            return [UNEXPECTED_MSG]
 
 
 def build_application(token: str, logic: BotLogic) -> Application:

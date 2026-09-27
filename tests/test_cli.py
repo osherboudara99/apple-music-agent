@@ -53,11 +53,15 @@ def test_ask_without_key(capsys):
     assert "MUSIC_AGENT_ANTHROPIC_API_KEY" in err
 
 
-def test_ask_with_key(stub_agent, capsys):
+def test_ask_is_one_shot(stub_agent, capsys):
     set_secret("anthropic_api_key", "sk-test")
     assert cli.main(["ask", "how", "many", "songs?"]) == 0
-    assert capsys.readouterr().out.strip() == "answer to how many songs?"
-    assert stub_agent.calls == [("cli", "how many songs?")]
+    assert cli.main(["ask", "again"]) == 0
+    assert capsys.readouterr().out.split("\n")[:2] == ["answer to how many songs?", "answer to again"]
+    (id1, q1), (reset1, _), (id2, _), (reset2, _) = stub_agent.calls
+    assert q1 == "how many songs?"
+    assert id1.startswith("ask-") and id1 != id2 and "cli" not in (id1, id2)
+    assert (reset1, reset2) == (id1, id2)  # no history left behind
 
 
 def test_chat_loop(stub_agent, monkeypatch, capsys):
@@ -127,3 +131,51 @@ def test_logging_hides_http_urls_and_rotates(isolated_home):
         assert any(isinstance(h, logging.handlers.RotatingFileHandler) for h in root.handlers)
     finally:
         root.handlers[:], root.level = saved[0], saved[1]
+
+
+class ExplodingAgent(StubAgent):
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+
+    def respond(self, chat_id, text):
+        self.calls.append((chat_id, text))
+        if text == "boom":
+            raise self.error
+        return f"answer to {text}"
+
+
+def test_chat_survives_unexpected_errors_and_ctrl_c(monkeypatch, capsys):
+    set_secret("anthropic_api_key", "sk-test")
+    agent = ExplodingAgent(RuntimeError("database is locked"))
+    monkeypatch.setattr(cli, "build_agent", lambda config, store, api_key: agent)
+    inputs = iter(["boom", "hello", "/exit"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(inputs))
+    assert cli.main(["chat"]) == 0
+    out = capsys.readouterr().out
+    assert "Something went wrong" in out and "answer to hello" in out
+
+    agent = ExplodingAgent(KeyboardInterrupt())
+    monkeypatch.setattr(cli, "build_agent", lambda config, store, api_key: agent)
+    inputs = iter(["boom", "hello", "/exit"])
+    assert cli.main(["chat"]) == 0
+    assert "(stopped)" in capsys.readouterr().out
+
+
+def test_ask_unexpected_error_exit_code(monkeypatch, capsys):
+    set_secret("anthropic_api_key", "sk-test")
+    agent = ExplodingAgent(RuntimeError("database is locked"))
+    monkeypatch.setattr(cli, "build_agent", lambda config, store, api_key: agent)
+    assert cli.main(["ask", "boom"]) == 1
+    assert "Something went wrong" in capsys.readouterr().err
+
+
+def test_build_agent_ignores_shell_base_url(monkeypatch, isolated_home):
+    from music_agent.store import Store
+
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://proxy.example.com")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "someone-elses-token")
+    agent = cli.build_agent(Config(timezone="UTC"), Store(isolated_home / "p.db"), "sk-mine")
+    client = agent.client
+    assert str(client.base_url).startswith("https://api.anthropic.com")
+    assert client.api_key == "sk-mine" and client.auth_token is None

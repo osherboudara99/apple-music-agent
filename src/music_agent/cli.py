@@ -6,6 +6,7 @@ import argparse
 import logging
 import logging.handlers
 import sys
+import uuid
 
 import anthropic
 
@@ -24,6 +25,8 @@ NO_KEY_MSG = (
     "or export MUSIC_AGENT_ANTHROPIC_API_KEY. (A generic ANTHROPIC_API_KEY is ignored on purpose.)"
 )
 CLI_CHAT_ID = "cli"
+ANTHROPIC_BASE_URL = "https://api.anthropic.com"
+UNEXPECTED_MSG = "Something went wrong on my side; details are in the log. Try again."
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -51,7 +54,10 @@ def build_agent(config: Config, store: Store, api_key: str) -> Agent:
         refresh=lambda: maybe_snapshot(store, music.read_library),
         create_playlist=lambda **kwargs: music.create_playlist(**kwargs),
     )
-    return Agent(anthropic.Anthropic(api_key=api_key), store, config, Toolbox(ctx))
+    # Explicit key and base_url: a shell's ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN (e.g. a work
+    # proxy) must never receive or replace this key.
+    client = anthropic.Anthropic(api_key=api_key, base_url=ANTHROPIC_BASE_URL)
+    return Agent(client, store, config, Toolbox(ctx))
 
 
 def format_status(summary: dict, spent: float, config: Config) -> str:
@@ -125,7 +131,26 @@ def _cmd_chat(agent: Agent) -> int:
             agent.reset(CLI_CHAT_ID)
             print("Started a new conversation.")
             continue
-        print(agent.respond(CLI_CHAT_ID, line))
+        try:
+            print(agent.respond(CLI_CHAT_ID, line))
+        except KeyboardInterrupt:
+            print("(stopped)")
+        except Exception:
+            logging.getLogger(__name__).exception("chat turn failed")
+            print(UNEXPECTED_MSG)
+
+
+def _cmd_ask(agent: Agent, question: str) -> int:
+    chat_id = f"ask-{uuid.uuid4().hex}"  # one-shot: no shared history with `chat`
+    try:
+        print(agent.respond(chat_id, question))
+    except Exception:
+        logging.getLogger(__name__).exception("ask failed")
+        print(UNEXPECTED_MSG, file=sys.stderr)
+        return 1
+    finally:
+        agent.reset(chat_id)
+    return 0
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -171,8 +196,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         agent = build_agent(config, store, key)
         if args.command == "ask":
-            print(agent.respond(CLI_CHAT_ID, " ".join(args.question)))
-            return 0
+            return _cmd_ask(agent, " ".join(args.question))
         return _cmd_chat(agent)
     if args.command == "run":
         from .bot import run_bot  # imported lazily: only `run` needs python-telegram-bot
