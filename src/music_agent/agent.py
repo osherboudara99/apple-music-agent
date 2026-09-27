@@ -72,6 +72,8 @@ Rules:
 - "How many songs" means distinct_tracks unless the user asks about plays or repeats.
 - If plays_is_lower_bound is true, say plays are only fully counted since plays_counted_since
   (e.g. "at least 57 plays").
+- If plays_near_boundary > 0, say about that many of the counted plays may be from just before
+  the period (their exact time is unknown).
 - For genre requests like "rock", use genre_family and mention which genres were included.
 - Create playlists right away when asked. Reply with the playlist name, the number of tracks and
   the first few tracks. Playlists are created in the "{config.playlist_folder}" folder.
@@ -124,6 +126,16 @@ class Agent:
             messages = messages[1:]
         return messages
 
+    def _over_budget(self, now: datetime) -> str | None:
+        spent = self.store.spend_since(month_start(now, self.config.tz))
+        if spent < self.config.monthly_budget_usd:
+            return None
+        return (
+            f"Monthly budget of ${self.config.monthly_budget_usd:.2f} reached "
+            f"(spent ${spent:.2f}). Raise monthly_budget_usd in config.toml or wait "
+            "until next month."
+        )
+
     def _record_usage(self, response, now: datetime) -> None:
         usage = response.usage
         cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
@@ -138,18 +150,17 @@ class Agent:
 
     def respond(self, chat_id: str, text: str) -> str:
         now = self.clock()
-        spent = self.store.spend_since(month_start(now, self.config.tz))
-        if spent >= self.config.monthly_budget_usd:
-            return (
-                f"Monthly budget of ${self.config.monthly_budget_usd:.2f} reached "
-                f"(spent ${spent:.2f}). Raise monthly_budget_usd in config.toml or wait "
-                "until next month."
-            )
+        budget_msg = self._over_budget(now)
+        if budget_msg:
+            return budget_msg
         history = self._history(chat_id, now)
         new: list[dict] = [{"role": "user", "content": text}]
         created: list[dict] = []  # playlists made this turn, reported if the turn fails later
         try:
-            for _ in range(MAX_TOOL_ROUNDS):
+            for round_number in range(MAX_TOOL_ROUNDS):
+                if round_number and (budget_msg := self._over_budget(now)):
+                    # Recheck between calls: one question must not run far past the budget.
+                    return self._failed_turn(chat_id, text, created, now, budget_msg)
                 response = self.client.messages.create(
                     model=self.config.model,
                     max_tokens=MAX_TOKENS,

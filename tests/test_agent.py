@@ -332,3 +332,15 @@ def test_failed_playlist_tool_is_not_reported_as_created(store):
     )
     assert agent.respond("cli", "q") == ag.API_ERROR_MSG
     assert store.load_messages("cli") == []
+
+
+def test_budget_is_rechecked_between_api_calls(store):
+    per_call = ag.cost_usd("claude-haiku-4-5", 1000, 100)
+    looping = [
+        msg([tool_use(f"toolu_{i}", "listening_stats", {})], "tool_use") for i in range(10)
+    ]
+    agent, client = make_agent(store, looping, budget=per_call * 1.5)
+    reply = agent.respond("cli", "q")
+    assert len(client.messages.calls) == 2  # third call would exceed the monthly budget
+    assert "budget" in reply.lower()
+    assert store.load_messages("cli") == []
