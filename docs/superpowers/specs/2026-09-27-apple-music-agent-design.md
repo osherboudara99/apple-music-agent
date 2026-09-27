@@ -113,7 +113,7 @@ Runs every 10 minutes (launchd job, or the built-in scheduler in `run`), and on 
 | New track (not stored) with `played_count > 0` and `played_date > previous snapshot time` | Insert 1 event (`approx = 0`). |
 | New track otherwise | Baseline only. |
 | `played_count` decreased | **High-water mark:** keep the stored count and date (metadata still updates); no events; log a warning. A lower count is usually a transient or misaligned read, and storing it would turn the restore into phantom plays. Cost: after a genuine decrease, plays aren't counted until the count passes the old value. |
-| Track missing from library | Set `removed_at`; keep the row. |
+| Track missing from library | Set `removed_at` (first time only); keep the row. Snapshots diff against every stored row, removed ones included, so a track missing from one partial read keeps its counts when it returns: its plays are counted and no phantom plays appear. |
 
 3. Every event stores `detected_at`, which gives ongoing sync-lag measurements (`detected_at − played_at`).
 4. **Concurrency:** the launchd snapshot job and the bot's on-demand snapshot can overlap. Steps 2–3 run inside one `BEGIN IMMEDIATE` transaction that reads the stored rows *inside* the transaction, so two overlapping snapshots can't both count the same play increase. The library read (step 1) happens before the transaction; the second writer simply sees no remaining difference.
@@ -136,9 +136,9 @@ Runs every 10 minutes (launchd job, or the built-in scheduler in `run`), and on 
 | `all_time_top` | `by` ∈ {track, artist, genre}, `limit` | ranked list with lifetime play counts |
 | `list_genres` | optional `period` | genres with track/play counts and their family |
 | `search_library` | optional `query`, `artist`, `genre`, `limit` | matching tracks |
-| `create_playlist` | `name`, `track_ids`, optional `description` | `{name, track_count, sample_tracks}`; adds a date suffix if the name exists |
+| `create_playlist` | `name`, `track_ids`, optional `description` | `{name, track_count, missing_track_ids, sample_tracks}`; adds a date suffix if the name exists. Refused before touching Music.app if none of the ids are known; the JXA builds under a unique temporary name (`music-agent building <id>`) and renames when complete, deleting it on failure, on zero matching tracks, or (from Python) after a timeout. |
 
-No tool edits or deletes existing playlists or tracks.
+No tool edits or deletes existing playlists or tracks. Library-wide tools (`all_time_top`, `search_library`, `list_genres` without a window) refresh the snapshot first (throttled to once per 60s). `ask` is one-shot (fresh history each call). The Claude client is created with an explicit key and `base_url`, so shell `ANTHROPIC_*` settings can't redirect or replace it.
 
 ## Agent behavior (system prompt rules)
 
