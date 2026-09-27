@@ -147,7 +147,20 @@ def listening_stats(
             for g, n in genre_plays.most_common(5)
         ],
         "has_approx_times": any(r.approx for r in rows),
+        "plays_near_boundary": _plays_near_boundary(store, period, {r.id for r in rows}),
     }
+
+
+def _plays_near_boundary(store: st.Store, period: Period, ids: set[str]) -> int:
+    """Approximate repeat plays counted in the period whose uncertainty window starts before it:
+    each is known only to fall between window_start and played_at, so it may belong earlier."""
+    with store.connect() as conn:
+        rows = conn.execute(
+            "SELECT persistent_id FROM plays WHERE approx = 1 AND played_at >= :s "
+            "AND played_at < :e AND window_start < :s",
+            {"s": st.to_iso(period.start), "e": st.to_iso(period.end)},
+        ).fetchall()
+    return sum(1 for r in rows if r["persistent_id"] in ids)
 
 
 def all_time_top(store: st.Store, by: str, limit: int = 10) -> list[dict]:

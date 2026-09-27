@@ -207,7 +207,8 @@ class Toolbox:
                 "listening_stats",
                 "Listening statistics for a time window: plays, distinct tracks and artists, top "
                 "tracks/artists/genres. plays_is_lower_bound=true means repeat plays before "
-                "plays_counted_since are not known.",
+                "plays_counted_since are not known. plays_near_boundary = how many counted plays "
+                "have approximate times that may fall just before the period.",
                 _schema({**_WINDOW_PROPS, **_GENRE_PROPS}),
                 self._listening_stats,
             ),

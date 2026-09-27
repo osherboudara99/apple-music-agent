@@ -172,3 +172,26 @@ def test_last_played_is_the_last_play_inside_a_past_window(isolated_home):
     assert rows["A"].last_played == dt("2026-09-20T12:00:00")  # not the replay on Sep 27
     assert rows["B"].last_played == dt("2026-09-20T09:00:00")
     assert [r.id for r in q.played_tracks(s, window)] == ["A", "B"]  # sorted by in-window time
+
+
+def test_plays_near_the_period_start_are_flagged(isolated_home):
+    s = st.Store(isolated_home / "edge.db")
+    latest = dt("2026-09-27T07:04:00")  # 00:04 PDT
+    window_start = dt("2026-09-27T06:55:00")  # previous snapshot at 23:55 PDT the day before
+    with s.transaction() as conn:
+        st.upsert_tracks(conn, [make_track("A", played_count=2, played_date=latest)], latest)
+        st.insert_plays(
+            conn,
+            [
+                PlayEvent("A", latest, None, dt("2026-09-27T07:05:00"), False),
+                PlayEvent("A", latest, window_start, dt("2026-09-27T07:05:00"), True),
+            ],
+        )
+        st.set_meta(conn, "install_at", "2026-09-01T00:00:00+00:00")
+    stats = q.listening_stats(s, period("today"), LA)
+    assert stats["plays"] == 2
+    assert stats["plays_near_boundary"] == 1  # the approximate repeat may belong to yesterday
+
+
+def test_no_boundary_flag_when_windows_are_inside_the_period(store):
+    assert q.listening_stats(store, period("today"), LA)["plays_near_boundary"] == 0
