@@ -85,3 +85,36 @@ def test_error_without_code():
     with pytest.raises(music.MusicError) as info:
         music.run_jxa("read_library.js", runner=fake_runner(stderr="", returncode=1))
     assert info.value.code is None
+
+
+def test_create_playlist_builds_payload_and_parses_result():
+    calls = []
+    out = json.dumps(
+        {"name": "Rock (Sep 27)", "persistent_id": "ABCDEF0123456789", "track_count": 2,
+         "missing_ids": ["GONE"]}
+    )
+    result = music.create_playlist(
+        name="Rock",
+        track_ids=["A1", "B2", "A1", "GONE"],
+        folder="Music Agent",
+        fallback_name="Rock (Sep 27)",
+        description="rock from this week",
+        runner=fake_runner(stdout=out, calls=calls),
+    )
+    args = calls[0]
+    assert args[3].endswith("jxa/create_playlist.js")
+    payload = json.loads(args[4])
+    assert payload == {
+        "name": "Rock",
+        "fallback_name": "Rock (Sep 27)",
+        "folder": "Music Agent",
+        "description": "rock from this week",
+        "track_ids": ["A1", "B2", "GONE"],
+    }
+    assert result == music.PlaylistResult("Rock (Sep 27)", "ABCDEF0123456789", 2, ["GONE"])
+
+
+@pytest.mark.parametrize(("name", "ids"), [("  ", ["A"]), ("Rock", [])])
+def test_create_playlist_rejects_empty_input(name, ids):
+    with pytest.raises(ValueError):
+        music.create_playlist(name, ids, "Music Agent", "x", runner=fake_runner(stdout="{}"))

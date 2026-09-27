@@ -6,7 +6,8 @@ import json
 import re
 import subprocess
 from collections.abc import Callable
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .models import Track
@@ -32,7 +33,7 @@ class MusicError(RuntimeError):
 
 
 def _default_runner(args: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(args, capture_output=True, text=True, timeout=300)
+    return subprocess.run(args, capture_output=True, text=True, timeout=300, check=False)
 
 
 def run_jxa(script: str, *args: str, runner: Runner | None = None) -> str:
@@ -51,7 +52,7 @@ def run_jxa(script: str, *args: str, runner: Runner | None = None) -> str:
 def _parse_time(value: str | None) -> datetime | None:
     if not value:
         return None
-    return datetime.fromisoformat(value).astimezone(timezone.utc).replace(microsecond=0)
+    return datetime.fromisoformat(value).astimezone(UTC).replace(microsecond=0)
 
 
 def parse_tracks(payload: str) -> list[Track]:
@@ -73,3 +74,43 @@ def parse_tracks(payload: str) -> list[Track]:
 
 def read_library(runner: Runner | None = None) -> list[Track]:
     return parse_tracks(run_jxa("read_library.js", runner=runner))
+
+
+@dataclass(frozen=True)
+class PlaylistResult:
+    name: str
+    persistent_id: str
+    track_count: int
+    missing_ids: list[str]
+
+
+def create_playlist(
+    name: str,
+    track_ids: list[str],
+    folder: str,
+    fallback_name: str,
+    description: str = "",
+    runner: Runner | None = None,
+) -> PlaylistResult:
+    ids = list(dict.fromkeys(track_ids))
+    if not name.strip():
+        raise ValueError("Playlist name is empty.")
+    if not ids:
+        raise ValueError("No tracks to add to the playlist.")
+    payload = json.dumps(
+        {
+            "name": name.strip(),
+            "fallback_name": fallback_name,
+            "folder": folder,
+            "description": description,
+            "track_ids": ids,
+        },
+        ensure_ascii=False,
+    )
+    data = json.loads(run_jxa("create_playlist.js", payload, runner=runner))
+    return PlaylistResult(
+        name=data["name"],
+        persistent_id=data["persistent_id"],
+        track_count=int(data["track_count"]),
+        missing_ids=list(data["missing_ids"]),
+    )
