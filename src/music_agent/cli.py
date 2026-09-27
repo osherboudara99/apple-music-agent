@@ -20,7 +20,7 @@ NOT_MAC_MSG = "music-agent only works on macOS (it reads your library from Music
 NO_KEY_MSG = (
     "No Anthropic API key found. Set one with:\n"
     "  uv run keyring set music-agent anthropic_api_key\n"
-    "or export ANTHROPIC_API_KEY. (`music-agent setup` will do this for you in a later version.)"
+    "or export MUSIC_AGENT_ANTHROPIC_API_KEY. (A generic ANTHROPIC_API_KEY is ignored on purpose.)"
 )
 CLI_CHAT_ID = "cli"
 

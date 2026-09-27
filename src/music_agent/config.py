@@ -12,9 +12,11 @@ import keyring
 import tomli_w
 
 KEYRING_SERVICE = "music-agent"
+# Package-specific names on purpose: a developer's general ANTHROPIC_API_KEY (often a work
+# key) must never be picked up and billed by music-agent.
 SECRET_ENV = {
-    "anthropic_api_key": "ANTHROPIC_API_KEY",
-    "telegram_bot_token": "TELEGRAM_BOT_TOKEN",
+    "anthropic_api_key": "MUSIC_AGENT_ANTHROPIC_API_KEY",
+    "telegram_bot_token": "MUSIC_AGENT_TELEGRAM_BOT_TOKEN",
 }
 
 

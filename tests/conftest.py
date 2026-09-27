@@ -7,8 +7,11 @@ def isolated_home(tmp_path, monkeypatch):
     """Point the data folder at a temp dir and clear secret env vars."""
     home = tmp_path / "home"
     monkeypatch.setenv("MUSIC_AGENT_HOME", str(home))
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    for name in (
+        "MUSIC_AGENT_ANTHROPIC_API_KEY", "MUSIC_AGENT_TELEGRAM_BOT_TOKEN",
+        "ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN",
+    ):
+        monkeypatch.delenv(name, raising=False)
     return home
 
 

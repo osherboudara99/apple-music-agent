@@ -48,7 +48,9 @@ def test_snapshot_failure_exit_code(monkeypatch, capsys):
 
 def test_ask_without_key(capsys):
     assert cli.main(["ask", "hi"]) == 2
-    assert "keyring set music-agent anthropic_api_key" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "keyring set music-agent anthropic_api_key" in err
+    assert "MUSIC_AGENT_ANTHROPIC_API_KEY" in err
 
 
 def test_ask_with_key(stub_agent, capsys):

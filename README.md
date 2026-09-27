@@ -55,6 +55,8 @@ snapshot_interval_minutes = 10
 playlist_folder = "Music Agent"
 ```
 
+Secrets live in the macOS Keychain (service `music-agent`). For development or CI you can set `MUSIC_AGENT_ANTHROPIC_API_KEY` / `MUSIC_AGENT_TELEGRAM_BOT_TOKEN` instead. A generic `ANTHROPIC_API_KEY` in your shell is ignored on purpose, so music-agent never uses or bills a key you set up for something else.
+
 ## Limitations
 
 - Songs you stream without adding them to your library aren't visible in Music.app, so they can't be counted.

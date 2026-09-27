@@ -80,10 +80,20 @@ def test_secret_from_keychain(fake_keyring):
     assert cfg.get_secret("anthropic_api_key") == "sk-keychain"
 
 
-def test_env_overrides_keychain(monkeypatch):
+def test_package_env_var_overrides_keychain(monkeypatch):
     cfg.set_secret("anthropic_api_key", "sk-keychain")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-env")
+    monkeypatch.setenv("MUSIC_AGENT_ANTHROPIC_API_KEY", "sk-env")
     assert cfg.get_secret("anthropic_api_key") == "sk-env"
+
+
+def test_generic_env_vars_are_ignored(monkeypatch):
+    """A developer's general ANTHROPIC_API_KEY (e.g. a work key) must never be used or billed."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-someone-elses")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:other-bot")
+    assert cfg.get_secret("anthropic_api_key") is None
+    assert cfg.get_secret("telegram_bot_token") is None
+    cfg.set_secret("anthropic_api_key", "sk-keychain")
+    assert cfg.get_secret("anthropic_api_key") == "sk-keychain"
 
 
 def test_missing_secret_is_none():

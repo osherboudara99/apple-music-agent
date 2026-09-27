@@ -163,7 +163,7 @@ snapshot_interval_minutes = 10
 playlist_folder = "Music Agent"
 ```
 
-Keychain (service `music-agent`): `anthropic_api_key`, and `telegram_bot_token` if Telegram is set up. Environment variables `ANTHROPIC_API_KEY` / `TELEGRAM_BOT_TOKEN` override the Keychain (useful for development and CI).
+Keychain (service `music-agent`): `anthropic_api_key`, and `telegram_bot_token` if Telegram is set up. Environment variables `MUSIC_AGENT_ANTHROPIC_API_KEY` / `MUSIC_AGENT_TELEGRAM_BOT_TOKEN` override the Keychain (useful for development and CI). The generic `ANTHROPIC_API_KEY` / `TELEGRAM_BOT_TOKEN` are deliberately ignored, so a developer's key for other work is never used or billed by music-agent.
 
 ## CLI
 
