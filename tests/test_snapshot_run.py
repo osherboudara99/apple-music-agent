@@ -99,3 +99,23 @@ def test_maybe_snapshot_skips_when_recent(store):
     assert calls == []
     assert maybe_snapshot(store, read, clock=lambda: dt("2026-09-27T18:02:00")) is not None
     assert calls == [1]
+
+
+def test_drop_then_restore_creates_no_phantom_plays(store):
+    clock = ticking_clock()
+    played = dt("2026-03-01T00:00:00")
+    run_snapshot(store, lambda: [make_track("A", played_count=150, played_date=played)], clock)
+    run_snapshot(store, lambda: [make_track("A", played_count=0, played_date=None)], clock)
+    run_snapshot(store, lambda: [make_track("A", played_count=150, played_date=played)], clock)
+    assert plays(store) == 0
+
+
+def test_stale_read_committed_late_does_not_double_count(store):
+    clock = ticking_clock()
+    run_snapshot(store, lambda: [make_track("A", played_count=5)], clock)
+    fresh = [make_track("A", played_count=6, played_date=dt("2026-09-27T18:00:30"))]
+    stale = [make_track("A", played_count=5)]
+    run_snapshot(store, lambda: fresh, clock)  # B: newer read commits first -> 1 play
+    run_snapshot(store, lambda: stale, clock)  # A: older read commits late
+    run_snapshot(store, lambda: fresh, clock)  # next regular snapshot
+    assert plays(store) == 1

@@ -32,9 +32,8 @@ def test_count_up_by_three_gives_one_exact_two_approx():
 def test_count_up_without_new_played_date_is_approx():
     old = make_track("A", played_count=5, played_date=dt("2026-09-27T17:00:00"))
     new = make_track("A", played_count=6, played_date=dt("2026-09-27T17:00:00"))
-    assert diff({"A": old}, [new], PREV, NOW).events == [
-        PlayEvent("A", dt("2026-09-27T17:00:00"), PREV, NOW, True)
-    ]
+    # never back-date to the old played_date: the play happened since the last snapshot
+    assert diff({"A": old}, [new], PREV, NOW).events == [PlayEvent("A", NOW, PREV, NOW, True)]
 
 
 def test_count_up_with_missing_played_date_uses_now():
@@ -64,7 +63,9 @@ def test_count_decrease_warns_and_records_nothing():
     new = make_track("A", name="Heretic", artist="A7X", played_count=2)
     result = diff({"A": old}, [new], PREV, NOW)
     assert result.events == []
-    assert result.warnings == ["play count went down for A7X - Heretic (9 -> 2); resetting baseline"]
+    assert result.warnings == [
+        "play count went down for A7X - Heretic (9 -> 2); keeping 9 until it is exceeded"
+    ]
 
 
 def test_unchanged_track_records_nothing():
@@ -76,3 +77,17 @@ def test_missing_tracks_are_removed():
     stored = {"A": make_track("A"), "B": make_track("B"), "C": make_track("C")}
     result = diff(stored, [make_track("B")], PREV, NOW)
     assert result.removed_ids == ["A", "C"]
+
+
+def test_count_decrease_keeps_high_water_mark_as_baseline():
+    old = make_track("A", played_count=9, played_date=dt("2026-09-01T00:00:00"))
+    new = make_track("A", name="Renamed", played_count=0, played_date=None)
+    (kept,) = diff({"A": old}, [new], PREV, NOW).baseline
+    assert kept.played_count == 9 and kept.played_date == dt("2026-09-01T00:00:00")
+    assert kept.name == "Renamed"  # metadata still refreshes
+
+
+def test_baseline_is_live_data_otherwise():
+    new = make_track("A", played_count=6, played_date=dt("2026-09-27T18:04:00"))
+    old = make_track("A", played_count=5)
+    assert diff({"A": old}, [new], PREV, NOW).baseline == [new]

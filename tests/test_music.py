@@ -16,33 +16,19 @@ def fake_runner(stdout="", stderr="", returncode=0, calls=None):
     return run
 
 
-SAMPLE = json.dumps(
-    [
-        {
-            "persistent_id": "3385DCEE8B3BB7F9",
-            "name": "שוש אלמוזלינו",
-            "artist": "Habiluim",
-            "album": "",
-            "genre": "Rock",
-            "duration_s": 201.5,
-            "date_added": "2024-01-02T03:04:05.000Z",
-            "played_count": 3,
-            "played_date": "2026-09-27T18:43:23.000Z",
-        },
-        {
-            "persistent_id": "0000000000000001",
-            "name": "Never Played",
-            "artist": "X",
-            "album": "Y",
-            "genre": "",
-            "duration_s": 0,
-            "date_added": None,
-            "played_count": 0,
-            "played_date": None,
-        },
-    ],
-    ensure_ascii=False,
-)
+COLUMNS = {
+    "ids": ["3385DCEE8B3BB7F9", "0000000000000001"],
+    "names": ["שוש אלמוזלינו", "Never Played"],
+    "artists": ["Habiluim", "X"],
+    "albums": [None, "Y"],
+    "genres": ["Rock", None],
+    "durations": [201.5, None],
+    "added": ["2024-01-02T03:04:05.000Z", None],
+    "counts": [3, None],
+    "played": ["2026-09-27T18:43:23.000Z", None],
+    "ids_after": ["3385DCEE8B3BB7F9", "0000000000000001"],
+}
+SAMPLE = json.dumps(COLUMNS, ensure_ascii=False)
 
 
 def test_parse_tracks():
@@ -52,7 +38,25 @@ def test_parse_tracks():
     assert first.played_date == dt("2026-09-27T18:43:23")
     assert first.date_added == dt("2024-01-02T03:04:05")
     assert second.played_date is None and second.date_added is None
-    assert second.played_count == 0
+    assert second.played_count == 0 and second.genre == "" and second.duration_s == 0.0
+    assert first.album == ""
+
+
+def test_parse_empty_library():
+    empty = {key: [] for key in COLUMNS}
+    assert music.parse_tracks(json.dumps(empty)) == []
+
+
+def test_misaligned_columns_are_rejected():
+    bad = dict(COLUMNS, counts=[3])  # a track changed between property reads
+    with pytest.raises(music.MusicError, match="changed while reading"):
+        music.parse_tracks(json.dumps(bad))
+
+
+def test_library_changing_during_read_is_rejected():
+    bad = dict(COLUMNS, ids_after=["3385DCEE8B3BB7F9", "FFFFFFFFFFFFFFFF"])
+    with pytest.raises(music.MusicError, match="changed while reading"):
+        music.parse_tracks(json.dumps(bad))
 
 
 def test_read_library_calls_osascript_with_script():

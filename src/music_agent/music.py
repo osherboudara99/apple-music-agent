@@ -55,20 +55,28 @@ def _parse_time(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value).astimezone(UTC).replace(microsecond=0)
 
 
+_COLUMNS = ("names", "artists", "albums", "genres", "durations", "added", "counts", "played")
+MISALIGNED_MSG = "Music.app library changed while reading; the next snapshot will retry."
+
+
 def parse_tracks(payload: str) -> list[Track]:
+    data = json.loads(payload)
+    ids = data["ids"]
+    if data["ids_after"] != ids or any(len(data[c]) != len(ids) for c in _COLUMNS):
+        raise MusicError(MISALIGNED_MSG)
     return [
         Track(
-            persistent_id=item["persistent_id"],
-            name=item["name"],
-            artist=item["artist"],
-            album=item["album"],
-            genre=item["genre"],
-            duration_s=float(item["duration_s"]),
-            date_added=_parse_time(item["date_added"]),
-            played_count=int(item["played_count"]),
-            played_date=_parse_time(item["played_date"]),
+            persistent_id=pid,
+            name=data["names"][i] or "",
+            artist=data["artists"][i] or "",
+            album=data["albums"][i] or "",
+            genre=data["genres"][i] or "",
+            duration_s=float(data["durations"][i] or 0),
+            date_added=_parse_time(data["added"][i]),
+            played_count=int(data["counts"][i] or 0),
+            played_date=_parse_time(data["played"][i]),
         )
-        for item in json.loads(payload)
+        for i, pid in enumerate(ids)
     ]
 
 

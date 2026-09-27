@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from . import store as st
@@ -19,6 +19,7 @@ class DiffResult:
     events: list[PlayEvent]
     removed_ids: list[str]
     warnings: list[str]
+    baseline: list[Track]  # what to store: live data, except play counts never go down
 
 
 def diff(
@@ -26,12 +27,21 @@ def diff(
 ) -> DiffResult:
     events: list[PlayEvent] = []
     warnings: list[str] = []
+    baseline: list[Track] = []
     live_ids: set[str] = set()
     for track in live:
         live_ids.add(track.persistent_id)
+        old = stored.get(track.persistent_id)
+        if prev_snapshot_at is None or old is None or track.played_count >= old.played_count:
+            baseline.append(track)
+        else:
+            # High-water mark: a lower count is usually a transient or misaligned read
+            # (iCloud reloading). Storing it would turn the restore into phantom plays.
+            baseline.append(
+                replace(track, played_count=old.played_count, played_date=old.played_date)
+            )
         if prev_snapshot_at is None:
             continue
-        old = stored.get(track.persistent_id)
         if old is None:
             if (
                 track.played_count > 0
@@ -44,7 +54,8 @@ def diff(
         if delta < 0:
             warnings.append(
                 f"play count went down for {track.artist} - {track.name} "
-                f"({old.played_count} -> {track.played_count}); resetting baseline"
+                f"({old.played_count} -> {track.played_count}); "
+                f"keeping {old.played_count} until it is exceeded"
             )
             continue
         if delta == 0:
@@ -52,7 +63,9 @@ def diff(
         exact = track.played_date is not None and (
             old.played_date is None or track.played_date > old.played_date
         )
-        played_at = track.played_date or now
+        # Never back-date: if played_date didn't advance, the plays still happened since
+        # the last snapshot, so date them "now" within that window.
+        played_at = track.played_date if exact else now
         if exact:
             events.append(PlayEvent(track.persistent_id, played_at, None, now, False))
         else:
@@ -60,7 +73,7 @@ def diff(
         for _ in range(delta - 1):
             events.append(PlayEvent(track.persistent_id, played_at, prev_snapshot_at, now, True))
     removed = sorted(set(stored) - live_ids)
-    return DiffResult(events, removed, warnings)
+    return DiffResult(events, removed, warnings, baseline)
 
 
 @dataclass(frozen=True)
@@ -101,7 +114,7 @@ def run_snapshot(
             return SnapshotResult(now, 0, 0, False, [], error=error)
         prev = st.last_snapshot_at(conn)
         result = diff(stored, live, prev, now)
-        st.upsert_tracks(conn, live, now)
+        st.upsert_tracks(conn, result.baseline, now)
         st.mark_removed(conn, result.removed_ids, now)
         st.insert_plays(conn, result.events)
         if prev is None:
