@@ -83,7 +83,10 @@ def system_timezone(localtime: str = "/etc/localtime") -> str:
 
 def load_config() -> Config:
     path = config_path()
-    raw = tomllib.loads(path.read_text()) if path.exists() else {}
+    try:
+        raw = tomllib.loads(path.read_text()) if path.exists() else {}
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{path} is not valid TOML: {exc}") from exc
     known = {f.name for f in fields(Config)}
     unknown = sorted(set(raw) - known)
     if unknown:
@@ -92,10 +95,16 @@ def load_config() -> Config:
     values = {}
     for key, value in raw.items():
         expected = _TYPES[key]
+        if expected is int and isinstance(value, float) and not value.is_integer():
+            raise ConfigError(f"{key} in {path} must be a whole number, got {value!r}")
         try:
             values[key] = expected(value)
         except (TypeError, ValueError) as exc:
             raise ConfigError(f"{key} in {path} must be {expected.__name__}, got {value!r}") from exc
+    if values.get("snapshot_interval_minutes", 1) < 1:
+        raise ConfigError(f"snapshot_interval_minutes in {path} must be at least 1")
+    if values.get("monthly_budget_usd", 0) < 0:
+        raise ConfigError(f"monthly_budget_usd in {path} can't be negative")
     try:
         ZoneInfo(values["timezone"])
     except (ZoneInfoNotFoundError, ValueError) as exc:

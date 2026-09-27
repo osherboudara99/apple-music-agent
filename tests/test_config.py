@@ -103,3 +103,31 @@ def test_missing_secret_is_none():
 def test_unknown_secret_name_rejected():
     with pytest.raises(KeyError):
         cfg.get_secret("nope")
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "0.5", "2.5"])
+def test_snapshot_interval_must_be_a_positive_whole_number(value):
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    cfg.config_path().write_text(f'timezone = "UTC"\nsnapshot_interval_minutes = {value}\n')
+    with pytest.raises(cfg.ConfigError, match="snapshot_interval_minutes"):
+        cfg.load_config()
+
+
+def test_whole_number_float_interval_is_accepted():
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    cfg.config_path().write_text('timezone = "UTC"\nsnapshot_interval_minutes = 15.0\n')
+    assert cfg.load_config().snapshot_interval_minutes == 15
+
+
+def test_negative_budget_is_an_error():
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    cfg.config_path().write_text('timezone = "UTC"\nmonthly_budget_usd = -1\n')
+    with pytest.raises(cfg.ConfigError, match="monthly_budget_usd"):
+        cfg.load_config()
+
+
+def test_malformed_toml_is_a_config_error():
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    cfg.config_path().write_text('timezone = "UTC\nmodel = \n')
+    with pytest.raises(cfg.ConfigError, match="config.toml"):
+        cfg.load_config()
