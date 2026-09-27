@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from . import periods, queries
+from . import store as st
 from .config import Config
 from .music import MusicError, PlaylistResult
 from .snapshot import SnapshotResult
@@ -113,10 +114,7 @@ class Toolbox:
         """Refresh when the window touches the last 24 hours (or is library-wide: None)."""
         if period is not None and period.end <= self.ctx.clock() - timedelta(hours=24):
             return {}
-        stale = (
-            "Could not refresh from Music.app; data may be up to "
-            f"{self.ctx.config.snapshot_interval_minutes} minutes old"
-        )
+        stale = f"Could not refresh from Music.app; {self._data_age()}"
         try:
             result = self.ctx.refresh()
         except MusicError as exc:
@@ -124,6 +122,21 @@ class Toolbox:
         if result is not None and result.error:
             return {"warning": f"{stale}: {result.error}"}
         return {}
+
+    def _data_age(self) -> str:
+        with self.ctx.store.connect() as conn:
+            last = st.last_snapshot_at(conn)
+        if last is None:
+            return "there has been no successful snapshot yet"
+        minutes = max(0, int((self.ctx.clock() - last).total_seconds() // 60))
+        if minutes < 90:
+            ago = f"{minutes} minutes ago"
+        elif minutes < 48 * 60:
+            ago = f"{minutes // 60} hours ago"
+        else:
+            ago = f"{minutes // (24 * 60)} days ago"
+        when = last.astimezone(self.ctx.config.tz).strftime("%Y-%m-%d %H:%M")
+        return f"data is from the last successful snapshot at {when} ({ago})"
 
     # --- handlers ------------------------------------------------------------
 

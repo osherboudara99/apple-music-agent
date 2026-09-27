@@ -190,3 +190,18 @@ def test_library_wide_refresh_failure_is_a_warning(store):
     result = make_toolbox(store, rec).run("search_library", {"query": "money"})
     assert "Could not refresh" in result["warning"]
     assert result["results"][0]["id"] == "C"
+
+
+def test_refresh_failure_states_actual_snapshot_age(store):
+    with store.transaction() as conn:
+        st.record_snapshot(conn, dt("2026-09-25T19:00:00"), 2, 0, 5)
+    rec = Recorder(refresh_error=MusicError("no access", -1743))
+    warning = make_toolbox(store, rec).run("listening_stats", {"period": "today"})["warning"]
+    assert "2026-09-25 12:00" in warning and "2 days ago" in warning
+    assert "10 minutes" not in warning
+
+
+def test_refresh_failure_with_no_snapshot_ever(store):
+    rec = Recorder(refresh_error=MusicError("no access", -1743))
+    warning = make_toolbox(store, rec).run("listening_stats", {"period": "today"})["warning"]
+    assert "no successful snapshot" in warning.lower()
