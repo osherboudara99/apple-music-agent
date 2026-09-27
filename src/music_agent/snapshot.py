@@ -53,6 +53,13 @@ def diff(
                 and track.played_date > prev_snapshot_at
             ):
                 events.append(PlayEvent(track.persistent_id, track.played_date, None, now, False))
+                # A song added and played several times between snapshots: only the latest
+                # play's time is known; the others happened after it was added.
+                extra_start = min(track.date_added or prev_snapshot_at, track.played_date)
+                for _ in range(track.played_count - 1):
+                    events.append(
+                        PlayEvent(track.persistent_id, track.played_date, extra_start, now, True)
+                    )
             continue
         delta = track.played_count - old.played_count
         if delta < 0:
@@ -117,8 +124,12 @@ def run_snapshot(
         # Diff against every stored track, removed ones included: a track missing from one
         # (partial) read keeps its counts when it comes back instead of looking brand new.
         stored = st.load_all_tracks(conn)
-        if not live and st.load_active_tracks(conn):
-            error = "Music.app returned 0 tracks; skipping this snapshot"
+        if not live:
+            # Never a valid baseline or update: usually a transient read while iCloud reloads.
+            error = (
+                "Music.app returned 0 tracks; skipping this snapshot "
+                "(if your library is really empty, add some music first)"
+            )
             st.record_snapshot(conn, now, 0, 0, int((time.monotonic() - started) * 1000), error)
             log.error("snapshot failed: %s", error)
             return SnapshotResult(now, 0, 0, False, [], error=error)

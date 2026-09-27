@@ -103,3 +103,17 @@ def test_window_start_uses_last_seen_and_never_follows_the_play():
     assert diff({"A": old}, [new], PREV, NOW, late).events[1].window_start == dt(
         "2026-09-27T12:00:00"
     )
+
+
+def test_new_track_with_several_plays_counts_them_all():
+    added = dt("2026-09-27T18:02:00")
+    new = make_track("N", played_count=3, played_date=dt("2026-09-27T18:08:00"), date_added=added)
+    events = diff({}, [new], PREV, NOW).events
+    assert events[0] == PlayEvent("N", dt("2026-09-27T18:08:00"), None, NOW, False)
+    assert events[1:] == [PlayEvent("N", dt("2026-09-27T18:08:00"), added, NOW, True)] * 2
+
+
+def test_new_track_extra_plays_window_starts_no_later_than_the_play():
+    new = make_track("N", played_count=2, played_date=dt("2026-09-27T18:08:00"),
+                     date_added=dt("2026-09-27T18:09:00"))  # clock skew
+    assert diff({}, [new], PREV, NOW).events[1].window_start == dt("2026-09-27T18:08:00")

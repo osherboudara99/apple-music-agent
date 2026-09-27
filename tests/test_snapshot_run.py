@@ -162,3 +162,11 @@ def test_returning_track_windows_start_when_it_was_last_seen(store):
         if r["approx"]:
             assert r["window_start"] == "2026-09-27T18:00:00+00:00"  # A's last sighting
             assert r["window_start"] <= r["played_at"]
+
+
+def test_zero_track_read_is_never_a_baseline(store):
+    result = run_snapshot(store, list, ticking_clock())
+    assert result.error is not None and "0 tracks" in result.error
+    with store.connect() as conn:
+        assert st.get_meta(conn, "install_at") is None
+        assert st.last_snapshot_at(conn) is None
