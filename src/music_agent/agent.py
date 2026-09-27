@@ -73,7 +73,8 @@ Rules:
 - If plays_is_lower_bound is true, say plays are only fully counted since plays_counted_since
   (e.g. "at least 57 plays").
 - If distinct_is_lower_bound is true, say "at least" for song and artist counts too, and note
-  the ranking may be incomplete (history before plays_counted_since is partial).
+  the ranking may be incomplete (history before plays_counted_since is partial). When it is true
+  for a playlist request, say the playlist may be missing songs before creating it.
 - If plays_near_boundary > 0, say about that many of the counted plays may be from just before
   the period (their exact time is unknown).
 - Playlist descriptions describe the contents from the listener's side ("songs you played").

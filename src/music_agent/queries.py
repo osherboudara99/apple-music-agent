@@ -106,6 +106,22 @@ def played_tracks(
     return out if limit is None else out[:limit]
 
 
+def completeness(store: st.Store, period: Period, tz: ZoneInfo) -> dict:
+    """How complete answers for this window can be, given when recording started."""
+    installed = install_time(store)
+    with store.connect() as conn:
+        last_snapshot = st.last_snapshot_at(conn)
+    before_install = installed is None or period.start < installed
+    return {
+        "plays_is_lower_bound": before_install,
+        "plays_counted_since": local_iso(installed, tz),
+        # A closed past window from before install can miss songs whose earlier play there was
+        # overwritten by a later replay (only the latest played date is known pre-install).
+        "distinct_is_lower_bound": before_install
+        and (last_snapshot is None or period.end < last_snapshot),
+    }
+
+
 def listening_stats(
     store: st.Store,
     period: Period,
@@ -114,10 +130,6 @@ def listening_stats(
     genres: list[str] | None = None,
 ) -> dict:
     rows = played_tracks(store, period, family, genres)
-    installed = install_time(store)
-    with store.connect() as conn:
-        last_snapshot = st.last_snapshot_at(conn)
-    before_install = installed is None or period.start < installed
     artist_plays: Counter[str] = Counter()
     artist_tracks: Counter[str] = Counter()
     genre_plays: Counter[str] = Counter()
@@ -134,12 +146,7 @@ def listening_stats(
             "end": local_iso(period.end, tz),
         },
         "plays": sum(r.plays_in_range for r in rows),
-        "plays_is_lower_bound": before_install,
-        # A closed past window from before install can miss songs whose earlier play there was
-        # overwritten by a later replay (only the latest played date is known pre-install).
-        "distinct_is_lower_bound": before_install
-        and (last_snapshot is None or period.end < last_snapshot),
-        "plays_counted_since": local_iso(installed, tz),
+        **completeness(store, period, tz),
         "distinct_tracks": len(rows),
         "distinct_artists": len(artist_tracks),
         "top_tracks": [

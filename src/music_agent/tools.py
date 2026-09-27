@@ -103,7 +103,7 @@ class Toolbox:
     # --- helpers -------------------------------------------------------------
 
     def _period(self, args: dict, required: bool = True) -> periods.Period | None:
-        if not required and not (args.get("period") or args.get("start")):
+        if not required and not (args.get("period") or args.get("start") or args.get("end")):
             return None
         return periods.resolve(
             args.get("period"), args.get("start"), args.get("end"),
@@ -165,6 +165,7 @@ class Toolbox:
             "count": min(len(rows), limit),
             "truncated": len(rows) > limit,
             "tracks": [r.as_dict(tz) for r in rows[:limit]],
+            **queries.completeness(self.ctx.store, period, tz),
             **extra,
         }
 

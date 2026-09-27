@@ -216,3 +216,18 @@ def test_playlist_description_always_credits_music_agent(store):
 def test_create_playlist_schema_requires_a_description(store):
     spec = next(d for d in make_toolbox(store, Recorder()).definitions() if d["name"] == "create_playlist")
     assert "description" in spec["input_schema"]["required"]
+
+
+def test_list_genres_with_only_an_end_date_is_an_error(store):
+    rec = Recorder()
+    result = make_toolbox(store, rec).run("list_genres", {"end": "2026-09-20"})
+    assert "error" in result and "genres" not in result
+
+
+def test_played_tracks_reports_completeness(store):
+    box = make_toolbox(store, Recorder())
+    past = box.run("played_tracks", {"start": "2026-03-01", "end": "2026-03-31"})
+    assert past["distinct_is_lower_bound"] is True
+    assert past["plays_counted_since"] == "2026-09-19T17:00-07:00"
+    today = box.run("played_tracks", {"period": "today"})
+    assert today["distinct_is_lower_bound"] is False
