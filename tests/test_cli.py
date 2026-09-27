@@ -106,3 +106,24 @@ def test_invalid_config_is_reported(isolated_home, capsys):
     (isolated_home / "config.toml").write_text('timezone = "Nope/Nope"\n')
     assert cli.main(["status"]) == 2
     assert "Nope/Nope" in capsys.readouterr().err
+
+
+def test_logging_hides_http_urls_and_rotates(isolated_home):
+    import logging
+    import logging.handlers
+
+    root = logging.getLogger()
+    saved = root.handlers[:], root.level
+    try:
+        cli.setup_logging()
+        logging.getLogger("httpx").info("POST https://api.telegram.org/bot123:SECRET/getUpdates")
+        logging.getLogger("httpx2").info("POST https://api.anthropic.com/v1/messages")
+        logging.getLogger("music_agent.test").info("visible line")
+        for handler in root.handlers:
+            handler.flush()
+        text = (isolated_home / "logs" / "music-agent.log").read_text()
+        assert "SECRET" not in text and "api.anthropic.com" not in text
+        assert "visible line" in text
+        assert any(isinstance(h, logging.handlers.RotatingFileHandler) for h in root.handlers)
+    finally:
+        root.handlers[:], root.level = saved[0], saved[1]

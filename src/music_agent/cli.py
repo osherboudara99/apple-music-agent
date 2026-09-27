@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import logging.handlers
 import sys
 
 import anthropic
@@ -29,12 +30,17 @@ def setup_logging(verbose: bool = False) -> None:
     log_dir().mkdir(parents=True, exist_ok=True)
     root = logging.getLogger()
     root.setLevel(logging.INFO)
-    file_handler = logging.FileHandler(log_dir() / "music-agent.log")
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_dir() / "music-agent.log", maxBytes=1_000_000, backupCount=3
+    )
     file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     console = logging.StreamHandler(sys.stderr)
     console.setLevel(logging.INFO if verbose else logging.WARNING)
     console.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
     root.handlers[:] = [file_handler, console]
+    # HTTP clients log full request URLs at INFO, and Telegram URLs contain the bot token.
+    for noisy in ("httpx", "httpx2", "httpcore", "telegram", "apscheduler"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
 def build_agent(config: Config, store: Store, api_key: str) -> Agent:
