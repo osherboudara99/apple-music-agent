@@ -20,7 +20,7 @@ Example requests:
 | Decision | Choice | Why |
 |---|---|---|
 | Where it runs | Locally on the user's Mac | Play counts and last-played dates are only exposed on-device (Music.app). The Apple Music web API has no per-song play counts, and its recently-played list is capped at 50 tracks with no timestamps. Cloud options (API-only, hybrid, rented Mac) were rejected as lower-accuracy or costly. |
-| Agent harness | Own Python bot + Claude API tool runner | Testable end to end, runs as a plain launchd process, the model can only call the tools we pass, no research-preview dependency, no MCP needed. |
+| Agent harness | Own Python bot + a hand-written tool-use loop over the Claude Messages API | Testable end to end, runs as a plain launchd process, the model can only call the tools we pass, no research-preview dependency, no MCP needed. The loop is hand-written rather than the SDK's beta tool runner so history and per-call usage can be persisted and the client faked in tests. |
 | Model | Default `claude-haiku-4-5`, configurable | Cheap (~$0.02/question). Users can switch to `claude-sonnet-5` if themed-playlist quality is poor. |
 | Chat interface | Command line always (`chat`, `ask`); Telegram optional | The CLI needs no extra setup. Telegram adds phone access: a bot per user, long polling, so it works behind NAT with no public endpoint. Each user needs their own bot because it must run on the Mac holding their library. |
 | History | Start from install; no backfill now | Schema keeps a `source` column so a privacy.apple.com import can be added later. |
