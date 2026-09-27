@@ -47,7 +47,7 @@ def install_time(store: st.Store) -> datetime | None:
 
 _PLAYED_SQL = """
 WITH p AS (
-    SELECT persistent_id, COUNT(*) AS n, MAX(approx) AS any_approx
+    SELECT persistent_id, COUNT(*) AS n, MAX(approx) AS any_approx, MAX(played_at) AS last_in
     FROM plays WHERE played_at >= :s AND played_at < :e
     GROUP BY persistent_id
 ),
@@ -56,7 +56,7 @@ ids AS (
     UNION
     SELECT persistent_id FROM tracks WHERE played_date >= :s AND played_date < :e
 )
-SELECT t.persistent_id, t.name, t.artist, t.album, t.genre, t.played_date,
+SELECT t.persistent_id, t.name, t.artist, t.album, t.genre, t.played_date, p.last_in,
        COALESCE(p.n, 0) AS n, COALESCE(p.any_approx, 0) AS any_approx
 FROM ids
 JOIN tracks t ON t.persistent_id = ids.persistent_id
@@ -80,6 +80,9 @@ def played_tracks(
             continue
         played_date = st.from_iso(r["played_date"])
         in_range = played_date is not None and period.start <= played_date < period.end
+        # Last play *inside* the window: a later replay must not leak into a past window.
+        candidates = [st.from_iso(r["last_in"]), played_date if in_range else None]
+        last_in_window = max((c for c in candidates if c is not None), default=None)
         out.append(
             TrackRow(
                 id=r["persistent_id"],
@@ -88,7 +91,7 @@ def played_tracks(
                 album=r["album"],
                 genre=r["genre"],
                 plays_in_range=max(r["n"], 1 if in_range else 0),
-                last_played=played_date,
+                last_played=last_in_window,
                 approx=bool(r["any_approx"]),
             )
         )

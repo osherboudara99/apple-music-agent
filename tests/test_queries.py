@@ -145,3 +145,30 @@ def test_status_summary(store):
     assert summary["last_snapshot"]["error"] is None
     assert summary["sync_lag"]["samples"] == 3
     assert summary["sync_lag"]["median_min"] == 5.0
+
+
+def test_last_played_is_the_last_play_inside_a_past_window(isolated_home):
+    s = st.Store(isolated_home / "window.db")
+    with s.transaction() as conn:
+        st.upsert_tracks(
+            conn,
+            [
+                make_track("A", played_count=3, played_date=dt("2026-09-27T18:00:00")),
+                make_track("B", played_count=1, played_date=dt("2026-09-20T09:00:00")),
+            ],
+            dt("2026-09-27T18:05:00"),
+        )
+        st.insert_plays(
+            conn,
+            [
+                PlayEvent("A", dt("2026-09-20T12:00:00"), None, dt("2026-09-20T12:05:00"), False),
+                PlayEvent("A", dt("2026-09-27T18:00:00"), None, dt("2026-09-27T18:05:00"), False),
+            ],
+        )
+        st.set_meta(conn, "install_at", "2026-09-01T00:00:00+00:00")
+    window = resolve(None, "2026-09-20", "2026-09-20", LA, NOW)
+    rows = {r.id: r for r in q.played_tracks(s, window)}
+    assert rows["A"].plays_in_range == 1
+    assert rows["A"].last_played == dt("2026-09-20T12:00:00")  # not the replay on Sep 27
+    assert rows["B"].last_played == dt("2026-09-20T09:00:00")
+    assert [r.id for r in q.played_tracks(s, window)] == ["A", "B"]  # sorted by in-window time
