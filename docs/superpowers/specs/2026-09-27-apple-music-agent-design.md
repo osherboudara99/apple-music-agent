@@ -1,0 +1,190 @@
+# Apple Music Agent — Design
+
+**Date:** 2026-09-27
+**Status:** Approved in brainstorming; awaiting spec review
+
+## Goal
+
+A personal agent I can message from Telegram on my phone to ask questions about my Apple Music listening and to create playlists from it. Example requests:
+
+- "How many songs have I listened to today?" / "…this year?"
+- "Create a playlist of the songs I listened to in the last 24 hours."
+- "Create a playlist of the rock songs I listened to in the past week."
+- "Create a playlist with <theme> based on what I listened to in the past week."
+- General stats questions (top artists, genres, most played, etc.).
+
+## Decisions
+
+| Decision | Choice | Why |
+|---|---|---|
+| Where it runs | Locally on my Mac | Play counts and last-played dates are only exposed on-device (Music.app). The Apple Music web API has no per-song play counts, and its recently-played list is capped at 50 tracks with no timestamps. Cloud options (API-only, hybrid, rented Mac) were rejected as lower-accuracy or costly. |
+| Agent harness | Own Python bot + Claude API tool runner ("Plan B") | Testable end to end, runs as a plain launchd process, the model can only call the tools we pass, no research-preview dependency, no MCP needed. |
+| Model | `claude-haiku-4-5`, set via `MODEL` in `.env` | Cheap (~$0.02/question). Swap to `claude-sonnet-5` if themed-playlist quality is poor. |
+| Chat interface | Telegram bot, long polling | Works behind NAT; no public endpoint needed. |
+| History | Start from install; no backfill now | Schema keeps a `source` column so a privacy.apple.com import can be added later. |
+| Autostart | launchd (snapshot every 10 min; bot at login with KeepAlive) | Always-on while logged in; `caffeinate -s` keeps the Mac awake on AC power. |
+
+## Verified facts (probed 2026-09-27)
+
+- JXA (`osascript -l JavaScript`) reads all 31,699 library tracks' properties in bulk in ~0.6s.
+- `tracks.whose({playedDate: {_greaterThan: d}})` filters in Music.app; a `whose()` that matches nothing throws on property read with `errorNumber === -1728`, which must be treated as empty.
+- Creating a playlist, duplicating tracks into it, and deleting it via JXA works (~1s).
+- An iPhone play appeared on the Mac within ~1 minute, and `playedDate` carries the phone's own play time. (One sample; CarPlay and Windows untested.)
+- Each track only has `playedCount` (cumulative) and `playedDate` (last play). There is no per-play event log.
+- Genres are granular (Rock, Hard Rock, Alternative, Metal, …).
+- The Mac's current energy setting is `sleep 1`; tmux and bun are not needed under Plan B.
+
+## Known limitations
+
+1. **Total plays (with repeats) only count from install day.** Distinct-tracks-played for any period (including "this year") is exact from day one, because it comes from each track's last-played date.
+2. **Songs not in the library are invisible.** Catalog/radio streams that were never added to the library don't appear in Music.app.
+3. **Repeat-play timing can be approximate.** If a track's count rises by N between snapshots, only the newest play has an exact time; the others fall between the two snapshots.
+4. **The Mac must be on, awake and logged in** for the bot to answer. Missed snapshots lose no plays (counts are cumulative), only timing precision.
+5. **Themed playlists are judgement-based.** The library has no mood or tempo data; Claude picks by its knowledge of titles and artists.
+
+## Architecture
+
+```
+iPhone / CarPlay / Windows --iCloud sync--> Music.app (Mac)
+                                               ^    |
+                                  JXA read /   |    | every 10 min
+                                  create       |    v
+Telegram <--> bot.py --> agent.py (tool runner) --> tools.py --> queries.py / music.py
+ (phone)     (allowlist)   (Claude API, Haiku)                     |
+                                                                   v
+                                                            SQLite plays.db
+```
+
+### Components
+
+Each unit has one job; `music.py` is the only module that talks to Music.app.
+
+| Module | Responsibility | Depends on |
+|---|---|---|
+| `music_agent/music.py` + `music_agent/jxa/*.js` | Run JXA scripts: bulk-read library tracks; create a playlist (in a "Music Agent" folder) from persistent IDs. Returns plain dataclasses. | `osascript` |
+| `music_agent/store.py` | SQLite schema, migrations, and read/write helpers. | `sqlite3` |
+| `music_agent/snapshot.py` | Pure diff function (old rows, new rows, times → events + updated rows) plus a `run_snapshot()` that wires `music` → diff → `store`. | `music`, `store` |
+| `music_agent/periods.py` | Resolve `today`, `last_24h`, `this_week`, `past_week`, `this_month`, `this_year`, or explicit ISO dates to `[start, end)` in the local time zone. | `zoneinfo` |
+| `music_agent/genres.py` | Genre → family mapping (e.g. rock = Rock, Hard Rock, Alternative, Metal, Punk, Grunge…); unknown genres map to themselves. | — |
+| `music_agent/queries.py` | Stats and track lists over `store` and live library data. | `store`, `periods`, `genres` |
+| `music_agent/tools.py` | The six Claude tools (`@beta_tool` functions), thin wrappers over `queries`/`music`. Each response includes the current local time. | `queries`, `music`, `snapshot` |
+| `music_agent/agent.py` | System prompt, tool runner call, per-chat history (SQLite), idle reset, token/cost accounting, budget check. | `anthropic`, `tools`, `store` |
+| `music_agent/bot.py` | Telegram long polling, user-ID allowlist, `/new` and `/status`, forwards text to `agent`. | `python-telegram-bot`, `agent` |
+| `music_agent/cli.py` | `music-agent snapshot`, `music-agent ask "<question>"`, `music-agent bot`, `music-agent status`. | all |
+| `scripts/` | `start.sh`, `install-autostart.sh`, `uninstall-autostart.sh`; launchd plist templates. | — |
+
+## Data model (SQLite)
+
+Data folder: `~/Library/Application Support/music-agent/` (`plays.db`, `logs/`).
+
+- `tracks(persistent_id PK, name, artist, album, genre, duration_s, date_added, played_count, played_date, last_seen_at, removed_at)`
+- `plays(id PK, persistent_id, played_at, window_start, detected_at, approx BOOL, source TEXT DEFAULT 'snapshot')`
+- `snapshots(id PK, taken_at, track_count, events_added, duration_ms, error)`
+- `meta(key PK, value)`: `install_at`, `timezone`
+- `conversations(chat_id, role, content_json, created_at)`: agent history
+- `usage(id PK, at, input_tokens, output_tokens, cache_read_tokens, cost_usd)`: spend tracking
+
+## Snapshot algorithm
+
+Runs every 10 minutes via launchd, and on demand (throttled to at most once per 60s) before any tool call that touches the last 24 hours.
+
+1. Bulk-read all library tracks.
+2. For each track, compare with its stored row:
+
+| Situation | Action |
+|---|---|
+| First ever run | Store baseline; record no events; set `meta.install_at`. |
+| `played_count` rose by N > 0 | Insert N events. Newest: `played_at = played_date`, `approx = 0`. Others: `played_at = played_date`, `window_start = previous snapshot time`, `approx = 1`. |
+| New track (not stored) with `played_count > 0` and `played_date > previous snapshot time` | Insert 1 event (`approx = 0`). |
+| New track otherwise | Baseline only. |
+| `played_count` decreased | Reset baseline; no events; log a warning. |
+| Track missing from library | Set `removed_at`; keep the row. |
+
+3. Every event stores `detected_at`, which gives ongoing sync-lag measurements (`detected_at − played_at`).
+
+## Answer sources
+
+| Question | Source | Accuracy |
+|---|---|---|
+| Distinct songs in a period | Live library: `played_date ≥ period start` | Exact from day one |
+| Total plays in a period (repeats) | `plays` table | Exact from `install_at`; the agent states the start date when the period begins before it |
+| All-time top tracks/artists/genres | Library `played_count` | Exact (lifetime counts) |
+| Playlists from recent plays | `plays` ∪ live library last-played, filtered by genre family | Exact membership |
+
+## Tools exposed to Claude
+
+| Tool | Parameters | Returns |
+|---|---|---|
+| `listening_stats` | `period` or `start`/`end`; optional `genre_family`, `genres` | plays, distinct tracks, distinct artists, top 5 tracks/artists/genres, `plays_counted_since`, `has_approx_times`, `now` |
+| `played_tracks` | same filters + `limit` (default 200) | list of `{id, name, artist, album, genre, plays_in_range, last_played}` |
+| `all_time_top` | `by` ∈ {track, artist, genre}, `limit` | ranked list with lifetime play counts |
+| `list_genres` | optional `period` | genres with track/play counts and their family |
+| `search_library` | optional `query`, `artist`, `genre`, `limit` | matching tracks |
+| `create_playlist` | `name`, `track_ids`, optional `description` | `{name, track_count, sample_tracks}`; adds a date suffix if the name exists |
+
+No tool edits or deletes existing playlists or tracks.
+
+## Agent behavior (system prompt rules)
+
+- Time zone America/Los_Angeles. "Today" = since local midnight; "past week" / "last 7 days" = rolling 7×24h; "this week" = since Monday 00:00; "this year" = since Jan 1.
+- Short plain-text replies suited to a phone.
+- Mention caveats only when relevant (e.g. "total plays counted since Sep 27", approximate times).
+- Create playlists immediately when asked; reply with name, count and first few tracks.
+- Themed playlists: if fewer than ~5 tracks fit, say so and offer to widen the window (past month or whole library) instead of padding.
+- On tool errors, say what failed; never invent numbers.
+- Conversation history persists per chat; it resets after 30 minutes idle or on `/new`.
+
+## Operations
+
+- **Config** (`.env`, gitignored, chmod 600): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`, `ANTHROPIC_API_KEY`, `MODEL=claude-haiku-4-5`, `MONTHLY_BUDGET_USD=5`.
+- **launchd jobs** (`~/Library/LaunchAgents/`):
+  - `com.osherboudara.music-agent.snapshot`: `StartInterval 600`, runs `music-agent snapshot`.
+  - `com.osherboudara.music-agent.bot`: `RunAtLoad` + `KeepAlive`, runs `caffeinate -s music-agent bot`.
+- **First-run permission:** `install-autostart.sh` runs one JXA call interactively so the Automation (Music) prompt can be approved. It then verifies that the launchd-run snapshot succeeds; if the permission isn't inherited, it prints the exact System Settings path to grant it.
+- **`/status`:** last snapshot time and result, sync-lag median and p95, month-to-date API spend versus budget.
+
+## Error handling
+
+| Failure | Behavior |
+|---|---|
+| Music.app not running | JXA launches it. |
+| JXA error | The tool returns `{error: …}`; Claude reports it plainly. |
+| Claude API error (after the SDK's retries) | Reply "Claude API unavailable, try again shortly"; log the request ID. |
+| Missed snapshots | The next run catches up from cumulative counts. |
+| Budget exceeded | The bot refuses new questions until next month; `/status` still works. |
+| Message from a non-allowlisted user | Ignored silently; logged. |
+
+## Security
+
+- Only the configured Telegram user ID is accepted.
+- Claude can call only the six tools; none are destructive.
+- Secrets live only in `.env` (gitignored, chmod 600).
+- Tool results (song titles, etc.) are untrusted text; the worst outcome is an odd playlist.
+
+## Testing
+
+- **Unit (pytest):**
+  - the snapshot diff, one test per row of the algorithm table;
+  - `periods` (DST transitions, Monday boundary, New Year);
+  - `genres`;
+  - `queries` against a fixture SQLite database.
+- **Agent:** a fake Anthropic client returns scripted `tool_use` turns; asserts that tool dispatch, history persistence, idle reset, usage accounting and the budget cap work. No API cost.
+- **Bot:** fake Telegram updates; asserts allowlist rejection, `/new`, `/status`, and the budget message.
+- **Mac integration (`-m mac`, opt-in):**
+  - read-only library read and `whose()` empty-match handling;
+  - create, verify and delete a probe playlist inside the "Music Agent" folder.
+- **Live acceptance (manual, ~$0.10):** the five example questions from the Goal section via `music-agent ask`.
+- **Final check:** the `verify` skill against this spec.
+
+## Out of scope (for now)
+
+- Cloud deployment, the Apple Music web API, and backfill from the privacy.apple.com export.
+- Editing or deleting existing playlists.
+- Audio analysis or mood features.
+- Multiple users.
+
+## Open items to verify during implementation
+
+1. JXA can create a folder playlist and create playlists inside it.
+2. launchd-run `osascript` gets (or can be granted) the Automation permission for Music.
+3. Sync lag for CarPlay and Windows plays (measured passively via `detected_at`).
