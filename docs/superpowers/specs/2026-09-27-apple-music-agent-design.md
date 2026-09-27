@@ -131,7 +131,7 @@ Runs every 10 minutes (launchd job, or the built-in scheduler in `run`), and on 
 
 | Tool | Parameters | Returns |
 |---|---|---|
-| `listening_stats` | `period` or `start`/`end`; optional `genre_family`, `genres` | plays, distinct tracks, distinct artists, top 5 tracks/artists/genres, `plays_counted_since`, `has_approx_times`, `now` |
+| `listening_stats` | `period` or `start`/`end`; optional `genre_family`, `genres` | plays, distinct tracks, distinct artists, top 5 tracks/artists/genres, `plays_counted_since`, `has_approx_times`, `plays_near_boundary` (approximate repeat plays whose uncertainty window starts before the period), `now` |
 | `played_tracks` | same filters + `limit` (default 200) | list of `{id, name, artist, album, genre, plays_in_range, last_played}` |
 | `all_time_top` | `by` ∈ {track, artist, genre}, `limit` | ranked list with lifetime play counts |
 | `list_genres` | optional `period` | genres with track/play counts and their family |
@@ -148,6 +148,8 @@ No tool edits or deletes existing playlists or tracks. Library-wide tools (`all_
 - Create playlists immediately when asked; reply with name, count and first few tracks.
 - Themed playlists: if fewer than ~5 tracks fit, say so and offer to widen the window (past month or whole library) instead of padding.
 - On tool errors, say what failed; never invent numbers.
+- If `plays_near_boundary` > 0, say about that many counted plays may be from just before the period.
+- The monthly budget is checked before every API call, not just once per question.
 - Conversation history persists per chat; it resets after 30 minutes idle or on `/new`.
 
 ## Configuration
