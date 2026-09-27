@@ -45,3 +45,18 @@ def test_create_playlist_in_folder_and_report_missing():
         assert second.name == f"{TEST_NAME} (fallback)"
     finally:
         _cleanup()
+
+
+def test_playlist_with_no_known_tracks_is_not_created():
+    try:
+        with pytest.raises(music.MusicError, match="None of the requested tracks"):
+            music.create_playlist(TEST_NAME, ["FFFFFFFFFFFFFFFF"], TEST_FOLDER, f"{TEST_NAME} (x)")
+        leftover = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e",
+             "const M=Application('Music'); String(M.playlists.whose({name: {_beginsWith: "
+             "'music-agent building'}}).length + M.playlists.whose({name: '" + TEST_NAME + "'}).length)"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert leftover == "0"
+    finally:
+        _cleanup()

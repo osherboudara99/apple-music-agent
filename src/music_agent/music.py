@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -22,10 +23,15 @@ PERMISSION_HELP = (
 )
 
 
+JXA_TIMEOUT_S = 300
+TEMP_PREFIX = "music-agent building "
+
+
 class MusicError(RuntimeError):
-    def __init__(self, message: str, code: int | None = None):
+    def __init__(self, message: str, code: int | None = None, timed_out: bool = False):
         super().__init__(message)
         self.code = code
+        self.timed_out = timed_out
 
     @property
     def permission_denied(self) -> bool:
@@ -33,12 +39,19 @@ class MusicError(RuntimeError):
 
 
 def _default_runner(args: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(args, capture_output=True, text=True, timeout=300, check=False)
+    return subprocess.run(
+        args, capture_output=True, encoding="utf-8", timeout=JXA_TIMEOUT_S, check=False
+    )
 
 
 def run_jxa(script: str, *args: str, runner: Runner | None = None) -> str:
     run = runner or _default_runner
-    proc = run(["osascript", "-l", "JavaScript", str(JXA_DIR / script), *args])
+    try:
+        proc = run(["osascript", "-l", "JavaScript", str(JXA_DIR / script), *args])
+    except subprocess.TimeoutExpired as exc:
+        raise MusicError(
+            f"Music.app didn't respond within {JXA_TIMEOUT_S} seconds.", timed_out=True
+        ) from exc
     if proc.returncode != 0:
         text = (proc.stderr or "").strip()
         match = _CODE_RE.search(text)
@@ -105,17 +118,36 @@ def create_playlist(
         raise ValueError("Playlist name is empty.")
     if not ids:
         raise ValueError("No tracks to add to the playlist.")
+    temp_name = f"{TEMP_PREFIX}{uuid.uuid4().hex[:12]}"
     payload = json.dumps(
         {
             "name": name.strip(),
             "fallback_name": fallback_name,
+            "temp_name": temp_name,
             "folder": folder,
             "description": description,
             "track_ids": ids,
         },
         ensure_ascii=False,
     )
-    data = json.loads(run_jxa("create_playlist.js", payload, runner=runner))
+    try:
+        data = json.loads(run_jxa("create_playlist.js", payload, runner=runner))
+    except MusicError as exc:
+        if not exc.timed_out:
+            raise
+        try:
+            run_jxa("delete_temp_playlist.js", temp_name, runner=runner)
+        except MusicError:
+            raise MusicError(
+                f"Music.app timed out building the playlist. A partial playlist named "
+                f"\"{temp_name}\" may be in the \"{folder}\" folder; delete it if so.",
+                timed_out=True,
+            ) from exc
+        raise MusicError(
+            "Music.app timed out building the playlist, so nothing was created. "
+            "Try fewer tracks.",
+            timed_out=True,
+        ) from exc
     return PlaylistResult(
         name=data["name"],
         persistent_id=data["persistent_id"],
