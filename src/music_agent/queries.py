@@ -115,6 +115,9 @@ def listening_stats(
 ) -> dict:
     rows = played_tracks(store, period, family, genres)
     installed = install_time(store)
+    with store.connect() as conn:
+        last_snapshot = st.last_snapshot_at(conn)
+    before_install = installed is None or period.start < installed
     artist_plays: Counter[str] = Counter()
     artist_tracks: Counter[str] = Counter()
     genre_plays: Counter[str] = Counter()
@@ -131,7 +134,11 @@ def listening_stats(
             "end": local_iso(period.end, tz),
         },
         "plays": sum(r.plays_in_range for r in rows),
-        "plays_is_lower_bound": installed is None or period.start < installed,
+        "plays_is_lower_bound": before_install,
+        # A closed past window from before install can miss songs whose earlier play there was
+        # overwritten by a later replay (only the latest played date is known pre-install).
+        "distinct_is_lower_bound": before_install
+        and (last_snapshot is None or period.end < last_snapshot),
         "plays_counted_since": local_iso(installed, tz),
         "distinct_tracks": len(rows),
         "distinct_artists": len(artist_tracks),

@@ -195,3 +195,18 @@ def test_plays_near_the_period_start_are_flagged(isolated_home):
 
 def test_no_boundary_flag_when_windows_are_inside_the_period(store):
     assert q.listening_stats(store, period("today"), LA)["plays_near_boundary"] == 0
+
+
+def test_distinct_counts_flagged_for_closed_windows_before_install(store):
+    closed = resolve(None, "2026-03-01", "2026-03-31", LA, NOW)  # before install, in the past
+    assert q.listening_stats(store, closed, LA)["distinct_is_lower_bound"] is True
+
+
+def test_distinct_counts_exact_for_windows_up_to_now(store):
+    assert q.listening_stats(store, period("this_year"), LA)["distinct_is_lower_bound"] is False
+    assert q.listening_stats(store, period("today"), LA)["distinct_is_lower_bound"] is False
+
+
+def test_distinct_counts_exact_for_closed_windows_after_install(store):
+    closed = resolve(None, "2026-09-21", "2026-09-26", LA, NOW)  # after install_at (Sep 20)
+    assert q.listening_stats(store, closed, LA)["distinct_is_lower_bound"] is False

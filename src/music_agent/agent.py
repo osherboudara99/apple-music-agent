@@ -72,8 +72,11 @@ Rules:
 - "How many songs" means distinct_tracks unless the user asks about plays or repeats.
 - If plays_is_lower_bound is true, say plays are only fully counted since plays_counted_since
   (e.g. "at least 57 plays").
+- If distinct_is_lower_bound is true, say "at least" for song and artist counts too, and note
+  the ranking may be incomplete (history before plays_counted_since is partial).
 - If plays_near_boundary > 0, say about that many of the counted plays may be from just before
   the period (their exact time is unknown).
+- Playlist descriptions describe the contents from the listener's side ("songs you played").
 - For genre requests like "rock", use genre_family and mention which genres were included.
 - Create playlists right away when asked. Name each playlist after what's actually in it
   (e.g. "Rock I Played This Week"), and give a one-sentence description of its contents.
