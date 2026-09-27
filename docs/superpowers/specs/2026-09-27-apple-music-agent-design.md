@@ -5,7 +5,7 @@
 
 ## Goal
 
-An installable, developer-first macOS tool that lets each user message their own Telegram bot to ask questions about their Apple Music listening and to create playlists from it. Each user installs it on their own Mac, adds their own Anthropic API key and Telegram bot, and runs it in the foreground, at login, or always-on on a dedicated Mac (e.g. a Mac mini).
+An installable, developer-first macOS tool that answers questions about the user's Apple Music listening and creates playlists from it. Each user installs it on their own Mac and adds their own Anthropic API key. They talk to it from the **command line** (`music-agent chat` / `music-agent ask`), and can **optionally** add their own Telegram bot to reach it from their phone. The Telegram bot can run in the foreground, at login, or always-on on a dedicated Mac (e.g. a Mac mini).
 
 Example requests:
 
@@ -22,7 +22,7 @@ Example requests:
 | Where it runs | Locally on the user's Mac | Play counts and last-played dates are only exposed on-device (Music.app). The Apple Music web API has no per-song play counts, and its recently-played list is capped at 50 tracks with no timestamps. Cloud options (API-only, hybrid, rented Mac) were rejected as lower-accuracy or costly. |
 | Agent harness | Own Python bot + Claude API tool runner | Testable end to end, runs as a plain launchd process, the model can only call the tools we pass, no research-preview dependency, no MCP needed. |
 | Model | Default `claude-haiku-4-5`, configurable | Cheap (~$0.02/question). Users can switch to `claude-sonnet-5` if themed-playlist quality is poor. |
-| Chat interface | Telegram bot per user, long polling | Works behind NAT with no public endpoint. Each user needs their own bot because it must run on the Mac holding their library. |
+| Chat interface | Command line always (`chat`, `ask`); Telegram optional | The CLI needs no extra setup. Telegram adds phone access: a bot per user, long polling, so it works behind NAT with no public endpoint. Each user needs their own bot because it must run on the Mac holding their library. |
 | History | Start from install; no backfill now | Schema keeps a `source` column so a privacy.apple.com import can be added later. |
 | Audience / distribution | Developer-first: PyPI package `music-agent`, installed with `uv tool install` or `pipx` | Simplest to build and maintain. A Homebrew tap can be added later without code changes. |
 | Name | Package and command `music-agent` | Short, generic, and keeps Apple's trademark out of the product name. The README says "for Apple Music on macOS". |
@@ -57,8 +57,10 @@ iPhone / CarPlay / Windows --iCloud sync--> Music.app (Mac)
                                                ^    |
                                   JXA read /   |    | every 10 min
                                   create       |    v
-Telegram <--> bot.py --> agent.py (tool runner) --> tools.py --> queries.py / music.py
- (phone)     (allowlist)   (Claude API)                            |
+Terminal <--> cli.py ---+
+                         +--> agent.py (tool runner) --> tools.py --> queries.py / music.py
+Telegram <--> bot.py ---+     (Claude API)                             |
+ (optional)  (allowlist)                                               |
                                                                    v
                                                             SQLite plays.db
 ```
@@ -78,7 +80,7 @@ Each unit has one job. `music.py` is the only module that talks to Music.app, an
 | `queries.py` | Stats and track lists over `store` and live library data. | `store`, `periods`, `genres` |
 | `tools.py` | The six Claude tools (`@beta_tool` functions), thin wrappers over `queries`/`music`. Each response includes the current local time. | `queries`, `music`, `snapshot` |
 | `agent.py` | System prompt, tool runner call, per-chat history, idle reset, token/cost accounting, budget check. | `anthropic`, `tools`, `store`, `config` |
-| `bot.py` | Telegram long polling, user-ID allowlist, `/new` and `/status`, forwards text to `agent`. | `python-telegram-bot`, `agent` |
+| `bot.py` | Optional Telegram front end: long polling, user-ID allowlist, `/new` and `/status`, forwards text to `agent`. | `python-telegram-bot`, `agent` |
 | `setup_wizard.py` | The interactive `setup` flow (below). Each step is idempotent. | `config`, `music`, `snapshot`, `service` |
 | `doctor.py` | Health checks, each returning pass/fail plus an exact fix. | `config`, `music`, `store`, `service` |
 | `service.py` | Generate, install, uninstall and query launchd agents. | `launchctl` |
@@ -154,20 +156,21 @@ No tool edits or deletes existing playlists or tracks.
 timezone = "America/Los_Angeles"   # detected from the system during setup
 model = "claude-haiku-4-5"
 monthly_budget_usd = 5.0
-telegram_allowed_user_id = 123456789
+telegram_allowed_user_id = 123456789   # only present if Telegram is set up
 snapshot_interval_minutes = 10
 playlist_folder = "Music Agent"
 ```
 
-Keychain (service `music-agent`): `anthropic_api_key`, `telegram_bot_token`. Environment variables `ANTHROPIC_API_KEY` / `TELEGRAM_BOT_TOKEN` override the Keychain (useful for development and CI).
+Keychain (service `music-agent`): `anthropic_api_key`, and `telegram_bot_token` if Telegram is set up. Environment variables `ANTHROPIC_API_KEY` / `TELEGRAM_BOT_TOKEN` override the Keychain (useful for development and CI).
 
 ## CLI
 
 | Command | Purpose |
 |---|---|
 | `music-agent setup` | Interactive wizard (below); safe to re-run |
-| `music-agent run [--no-scheduler]` | Telegram bot in the foreground, with the snapshot scheduler built in unless disabled |
-| `music-agent ask "<question>"` | One question from the terminal, no Telegram |
+| `music-agent chat` | Interactive terminal conversation with the agent (multi-turn; `/new` resets, `/exit` or Ctrl-D quits). Same agent, history rules and budget as Telegram. |
+| `music-agent ask "<question>"` | One question, one answer; scriptable |
+| `music-agent run [--no-scheduler]` | Telegram bot in the foreground, with the snapshot scheduler built in unless disabled. Refuses to start, pointing to `setup`, if Telegram isn't configured. |
 | `music-agent snapshot` | Take a snapshot now |
 | `music-agent status` | Last snapshot, sync-lag median/p95, month-to-date spend vs budget, service state |
 | `music-agent doctor` | Runs every health check; prints pass/fail and the exact fix for each failure |
@@ -179,14 +182,14 @@ Each step checks whether it's already done and skips if so.
 
 1. **Environment:** confirm macOS, Music.app, and a non-empty library. Make one JXA call so the Automation (Music) permission prompt appears while the user is present.
 2. **Anthropic API key:** hidden input, validated with a free API call (`models.list`), saved to the Keychain.
-3. **Telegram bot:** print the BotFather steps. Validate the pasted token with `getMe` and save it to the Keychain. Ask the user to message the bot, wait on `getUpdates`, confirm "Paired with @username?", and save the user ID to config.
+3. **Telegram (optional):** ask "Set up Telegram to reach the agent from your phone? [y/N]". If no, skip; the user can re-run `setup` later. If yes, print the BotFather steps. Validate the pasted token with `getMe` and save it to the Keychain. Ask the user to message the bot, wait on `getUpdates`, confirm "Paired with @username?", and save the user ID to config.
 4. **Preferences:** model, monthly budget, time zone (system default, user confirms).
 5. **First snapshot:** baseline, then print a summary (track count, distinct tracks played this year).
-6. **Run mode:** start now in the foreground; install autostart (`service install`); or print the path to the always-on guide.
+6. **Background recording and run mode:** recommend `service install` so plays are recorded every 10 minutes even when no command is running (without it, plays are only recorded when the user runs a command, so repeat-play counts are less complete). CLI-only users then get the `chat`/`ask` quickstart. Telegram users also choose: start the bot now in the foreground, install it at login (part of `service install`), or read the always-on guide.
 
 ### launchd service
 
-`service install` writes to `~/Library/LaunchAgents/` and loads them with `launchctl bootstrap gui/$UID`:
+`service install` writes to `~/Library/LaunchAgents/` and loads them with `launchctl bootstrap gui/$UID`. The snapshot job is always installed; the bot job only when Telegram is configured (re-running `service install` after enabling Telegram adds it):
 
 - `io.music-agent.snapshot`: `StartInterval` = interval × 60, runs `<abs path>/music-agent snapshot`.
 - `io.music-agent.bot`: `RunAtLoad` + `KeepAlive`, runs `<abs path>/music-agent run --no-scheduler`, wrapped in `caffeinate -s` when the Mac has a battery.
@@ -202,25 +205,26 @@ Each step checks whether it's already done and skips if so.
 | Automation permission denied (`-1743`) | The tool returns an error; `doctor` prints the System Settings path to grant it. |
 | JXA error | The tool returns `{error: …}`; Claude reports it plainly. |
 | Claude API error (after the SDK's retries) | Reply "Claude API unavailable, try again shortly"; log the request ID. |
-| Missing or invalid secrets | `run` refuses to start and points to `setup` / `doctor`. |
+| Missing or invalid Anthropic key | `chat`, `ask` and `run` refuse to start and point to `setup` / `doctor`. |
+| Telegram not configured | `run` explains Telegram is optional and how to enable it; everything else works. `doctor` reports Telegram checks as "skipped (not configured)", not failures. |
 | Missed snapshots | The next run catches up from cumulative counts. |
 | Budget exceeded | The bot refuses new questions until next month; `/status` still works. |
 | Message from a non-allowlisted user | Ignored silently; logged. |
 
 ## Security and privacy
 
-- Only the configured Telegram user ID is accepted.
+- If Telegram is enabled, only the configured Telegram user ID is accepted.
 - Claude can call only the six tools; none are destructive.
 - Secrets live in the Keychain, never in the repo or config file.
 - Tool results (song titles, etc.) are untrusted text; the worst outcome is an odd playlist.
-- `docs/privacy.md` states what leaves the machine: song, artist, album and genre text in tool results goes to Anthropic's API, and chat messages go through Telegram's servers. Nothing else is sent anywhere.
+- `docs/privacy.md` states what leaves the machine: song, artist, album and genre text in tool results goes to Anthropic's API, and, if Telegram is enabled, chat messages go through Telegram's servers. Nothing else is sent anywhere.
 
 ## Documentation
 
 | File | Contents |
 |---|---|
-| `README.md` | What it does, requirements, a 3-command quickstart, example questions, limitations, costs |
-| `docs/always-on-mac-mini.md` | Dedicated Mac setup: automatic login versus FileVault trade-off, `pmset` (never sleep, `autorestart` after power failure), Sync Library on, Music.app open, SSH and Screen Sharing, `service install`, security implications of an always-signed-in Apple ID |
+| `README.md` | What it does, requirements, quickstart (install, `setup`, `chat`), optional Telegram section, example questions, limitations, costs |
+| `docs/always-on-mac-mini.md` | For Telegram users who want the bot reachable 24/7. Dedicated Mac setup: automatic login versus FileVault trade-off, `pmset` (never sleep, `autorestart` after power failure), Sync Library on, Music.app open, SSH and Screen Sharing, `service install`, security implications of an always-signed-in Apple ID |
 | `docs/privacy.md` | Data flows, as above |
 | `docs/troubleshooting.md` | Organized by `doctor` check |
 
@@ -242,7 +246,8 @@ Each step checks whether it's already done and skips if so.
   - `config` with a fake keyring backend.
 - **Agent:** a fake Anthropic client returns scripted `tool_use` turns; asserts that tool dispatch, history persistence, idle reset, usage accounting and the budget cap work. No API cost.
 - **Bot:** fake Telegram updates; asserts allowlist rejection, `/new`, `/status`, and the budget message.
-- **Setup wizard:** scripted inputs with mocked Telegram and Anthropic calls; re-running skips completed steps.
+- **Setup wizard:** scripted inputs with mocked Telegram and Anthropic calls; the CLI-only path (Telegram declined) completes; re-running skips completed steps.
+- **CLI chat:** scripted stdin with the fake Anthropic client; `/new` and `/exit` work; history is kept across turns.
 - **Service:** generated plists compared against known-good files; `launchctl` calls mocked.
 - **Doctor:** every check in its passing and failing state.
 - **Mac integration (`-m mac`, opt-in):**
@@ -253,7 +258,7 @@ Each step checks whether it's already done and skips if so.
 
 ## Build phases
 
-1. **Core and bot:** `music`, `config`, `store`, `snapshot`, `periods`, `genres`, `queries`, `tools`, `agent`, `bot`, and the `run` / `ask` / `snapshot` / `status` commands. Config and Keychain are used from day one; before the wizard exists, the developer sets secrets through a documented one-line `keyring set` command.
+1. **Core, CLI and bot:** `music`, `config`, `store`, `snapshot`, `periods`, `genres`, `queries`, `tools`, `agent`, then the `chat` / `ask` / `snapshot` / `status` commands (usable end to end from the terminal), then `bot` and `run`. Config and Keychain are used from day one; before the wizard exists, the developer sets secrets through a documented one-line `keyring set` command.
 2. **Distribution:** `setup`, `doctor`, `service`, the docs, CI, and the release pipeline.
 
 ## Out of scope (for now)
