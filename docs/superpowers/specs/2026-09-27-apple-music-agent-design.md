@@ -99,6 +99,8 @@ Data folder: `~/Library/Application Support/music-agent/` (`config.toml`, `plays
 
 ## Snapshot algorithm
 
+**Why:** Music.app keeps no listening history, only each track's lifetime play count and last-played date, and each new play overwrites that date. Without snapshots the agent can answer distinct-songs, recent-playlist and all-time questions, but not repeat-play counts, past windows ("last Tuesday", "in October") or trends. History can't be reconstructed later, so snapshots start at install. The README explains this in the same terms.
+
 Runs every 10 minutes (launchd job, or the built-in scheduler in `run`), and on demand (throttled to at most once per 60s) before any tool call that touches the last 24 hours.
 
 1. Bulk-read all library tracks.
