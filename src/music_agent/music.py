@@ -136,11 +136,19 @@ def create_playlist(
         if not exc.timed_out:
             raise
         try:
-            run_jxa("delete_temp_playlist.js", temp_name, runner=runner)
+            deleted = run_jxa("delete_temp_playlist.js", temp_name, runner=runner).strip()
         except MusicError:
             raise MusicError(
                 f"Music.app timed out building the playlist. A partial playlist named "
                 f"\"{temp_name}\" may be in the \"{folder}\" folder; delete it if so.",
+                timed_out=True,
+            ) from exc
+        if deleted == "0":
+            # The build had already been renamed when it timed out: the playlist may exist.
+            raise MusicError(
+                f"Music.app timed out while finishing the playlist. It may already exist as "
+                f"\"{name.strip()}\" (or \"{fallback_name}\") in the \"{folder}\" folder; "
+                "check before retrying.",
                 timed_out=True,
             ) from exc
         raise MusicError(

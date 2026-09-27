@@ -181,3 +181,16 @@ def test_default_runner_uses_utf8(monkeypatch):
     monkeypatch.setattr(music.subprocess, "run", fake_run)
     music._default_runner(["osascript"])
     assert seen["encoding"] == "utf-8" and seen["check"] is False and seen["timeout"] > 0
+
+
+def test_timeout_after_rename_warns_playlist_may_exist():
+    def runner(args):
+        if args[3].endswith("create_playlist.js"):
+            raise subprocess.TimeoutExpired(args, 300)
+        return subprocess.CompletedProcess(args, 0, "0\n", "")  # cleanup deleted nothing
+
+    with pytest.raises(music.MusicError) as info:
+        music.create_playlist("Rock", ["A"], "Music Agent", "Rock (x)", runner=runner)
+    text = str(info.value)
+    assert "nothing was created" not in text
+    assert '"Rock"' in text and "may already exist" in text
