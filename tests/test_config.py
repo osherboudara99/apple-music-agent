@@ -131,3 +131,14 @@ def test_malformed_toml_is_a_config_error():
     cfg.config_path().write_text('timezone = "UTC\nmodel = \n')
     with pytest.raises(cfg.ConfigError, match="config.toml"):
         cfg.load_config()
+
+
+@pytest.mark.parametrize(
+    "line", ["snapshot_interval_minutes = true", "telegram_allowed_user_id = true",
+             "monthly_budget_usd = false"],
+)
+def test_booleans_are_rejected_for_numeric_settings(line):
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    cfg.config_path().write_text(f'timezone = "UTC"\n{line}\n')
+    with pytest.raises(cfg.ConfigError, match=line.split(" ")[0]):
+        cfg.load_config()

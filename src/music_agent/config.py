@@ -95,6 +95,9 @@ def load_config() -> Config:
     values = {}
     for key, value in raw.items():
         expected = _TYPES[key]
+        if expected in (int, float) and isinstance(value, bool):
+            # bool is an int subclass: `true` would silently become 1 (e.g. user id 1).
+            raise ConfigError(f"{key} in {path} must be a number, got {value!r}")
         if expected is int and isinstance(value, float) and not value.is_integer():
             raise ConfigError(f"{key} in {path} must be a whole number, got {value!r}")
         try:
