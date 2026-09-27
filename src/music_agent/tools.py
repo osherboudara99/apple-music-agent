@@ -110,7 +110,8 @@ class Toolbox:
         )
 
     def _refresh_for(self, period: periods.Period | None) -> dict:
-        if period is None or period.end <= self.ctx.clock() - timedelta(hours=24):
+        """Refresh when the window touches the last 24 hours (or is library-wide: None)."""
+        if period is not None and period.end <= self.ctx.clock() - timedelta(hours=24):
             return {}
         stale = (
             "Could not refresh from Music.app; data may be up to "
@@ -156,7 +157,9 @@ class Toolbox:
 
     def _all_time_top(self, args: dict) -> dict:
         limit = max(1, min(int(args.get("limit", 10)), 50))
-        return {"results": queries.all_time_top(self.ctx.store, args.get("by", "track"), limit)}
+        extra = self._refresh_for(None)
+        results = queries.all_time_top(self.ctx.store, args.get("by", "track"), limit)
+        return {"results": results, **extra}
 
     def _list_genres(self, args: dict) -> dict:
         period = self._period(args, required=False)
@@ -165,14 +168,20 @@ class Toolbox:
 
     def _search_library(self, args: dict) -> dict:
         limit = max(1, min(int(args.get("limit", 50)), 200))
+        extra = self._refresh_for(None)
         results = queries.search_library(
             self.ctx.store, args.get("query"), args.get("artist"), args.get("genre"), limit
         )
-        return {"results": results}
+        return {"results": results, **extra}
 
     def _create_playlist(self, args: dict) -> dict:
         name = str(args.get("name", ""))
         track_ids = [str(t) for t in args.get("track_ids", [])]
+        if track_ids and not queries.track_names(self.ctx.store, track_ids):
+            raise ValueError(
+                "None of these tracks are in the library. Use ids from played_tracks or "
+                "search_library."
+            )
         today = self.ctx.clock().astimezone(self.ctx.config.tz).date().isoformat()
         result = self.ctx.create_playlist(
             name=name,

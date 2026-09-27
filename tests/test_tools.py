@@ -167,3 +167,26 @@ def test_unexpected_exception_is_contained(store):
     rec.create_playlist = explode
     result = make_toolbox(store, rec).run("create_playlist", {"name": "x", "track_ids": ["A"]})
     assert result["error"].startswith("Internal error in create_playlist")
+
+
+def test_create_playlist_with_no_known_tracks_never_touches_music_app(store):
+    rec = Recorder()
+    result = make_toolbox(store, rec).run("create_playlist", {"name": "x", "track_ids": ["NOPE"]})
+    assert "None of these tracks" in result["error"]
+    assert rec.playlist_calls == []
+
+
+def test_library_wide_tools_refresh_first(store):
+    rec = Recorder()
+    box = make_toolbox(store, rec)
+    box.run("all_time_top", {"by": "track"})
+    box.run("search_library", {"query": "money"})
+    box.run("list_genres", {})
+    assert rec.refresh_calls == 3
+
+
+def test_library_wide_refresh_failure_is_a_warning(store):
+    rec = Recorder(refresh_error=MusicError("no access", -1743))
+    result = make_toolbox(store, rec).run("search_library", {"query": "money"})
+    assert "Could not refresh" in result["warning"]
+    assert result["results"][0]["id"] == "C"
