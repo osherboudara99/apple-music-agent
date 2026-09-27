@@ -67,10 +67,9 @@ def test_insert_plays(store):
 
 
 def test_transaction_rolls_back_on_error(store):
-    with pytest.raises(RuntimeError):
-        with store.transaction() as conn:
-            st.upsert_tracks(conn, [make_track("A")], dt("2026-09-27T00:00:00"))
-            raise RuntimeError("boom")
+    with pytest.raises(RuntimeError), store.transaction() as conn:
+        st.upsert_tracks(conn, [make_track("A")], dt("2026-09-27T00:00:00"))
+        raise RuntimeError("boom")
     with store.connect() as conn:
         assert st.load_active_tracks(conn) == {}
 

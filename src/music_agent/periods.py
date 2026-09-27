@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 PERIOD_NAMES = ("today", "last_24h", "this_week", "past_week", "this_month", "this_year")
@@ -21,7 +21,7 @@ class Period:
 
 
 def _utc(dt: datetime) -> datetime:
-    return dt.astimezone(timezone.utc)
+    return dt.astimezone(UTC)
 
 
 def _parse(value: str, tz: ZoneInfo, is_end: bool) -> datetime:

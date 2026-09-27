@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -6,7 +6,6 @@ import pytest
 from music_agent.periods import PERIOD_NAMES, PeriodError, resolve
 
 LA = ZoneInfo("America/Los_Angeles")
-UTC = timezone.utc
 
 
 def utc(s: str) -> datetime:

@@ -60,7 +60,7 @@ def test_read_error_is_recorded_and_changes_nothing(store):
 def test_empty_library_read_is_an_error_not_a_mass_removal(store):
     clock = ticking_clock()
     run_snapshot(store, lambda: [make_track("A"), make_track("B")], clock)
-    result = run_snapshot(store, lambda: [], clock)
+    result = run_snapshot(store, list, clock)
     assert result.error is not None and "0 tracks" in result.error
     with store.connect() as conn:
         assert set(st.load_active_tracks(conn)) == {"A", "B"}
