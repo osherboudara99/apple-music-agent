@@ -25,7 +25,7 @@ PRICES_PER_MTOK: dict[str, tuple[float, float]] = {
 }
 FALLBACK_PRICE = (5.0, 25.0)
 
-MAX_TOKENS = 4096
+MAX_TOKENS = 16000
 MAX_TOOL_ROUNDS = 10
 MAX_HISTORY_MESSAGES = 40
 IDLE_RESET = timedelta(minutes=30)
@@ -35,6 +35,9 @@ TOO_MANY_STEPS_MSG = (
     "I couldn't finish that in a reasonable number of steps. Try a narrower question."
 )
 REFUSAL_MSG = "Claude declined to answer that one."
+TOO_LARGE_MSG = (
+    "That request was too large to finish in one go. Try a smaller one (e.g. fewer tracks)."
+)
 
 
 class ToolRunner(Protocol):
@@ -155,6 +158,10 @@ class Agent:
                 )
                 self._record_usage(response, now)
                 blocks = [b for b in (_block_param(x) for x in response.content) if b is not None]
+                if response.stop_reason != "tool_use":
+                    # A tool_use here was cut off (e.g. max_tokens) and never runs; saving it
+                    # without a tool_result would make every later request fail.
+                    blocks = [b for b in blocks if b["type"] != "tool_use"]
                 if blocks:  # the API rejects assistant turns with empty content
                     new.append({"role": "assistant", "content": blocks})
                 if response.stop_reason != "tool_use":
@@ -188,5 +195,7 @@ class Agent:
         if response.stop_reason == "refusal" and not text:
             return REFUSAL_MSG
         if response.stop_reason == "max_tokens":
+            if any(b.type == "tool_use" for b in response.content):
+                return TOO_LARGE_MSG
             return f"{text} (answer cut off)"
         return text or "(no answer)"

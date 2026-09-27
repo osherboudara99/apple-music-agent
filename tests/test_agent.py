@@ -115,7 +115,7 @@ def test_plain_answer_persists_history_and_usage(store):
     agent, client = make_agent(store, [msg([text("You played 4 songs today.")])])
     assert agent.respond("cli", "how many songs today?") == "You played 4 songs today."
     call = client.messages.calls[0]
-    assert call["model"] == "claude-haiku-4-5" and call["max_tokens"] == 4096
+    assert call["model"] == "claude-haiku-4-5" and call["max_tokens"] == ag.MAX_TOKENS
     assert call["messages"] == [{"role": "user", "content": "how many songs today?"}]
     assert [m["role"] for m, _ in store.load_messages("cli")] == ["user", "assistant"]
     assert store.spend_since(dt("2026-09-01T00:00:00")) == pytest.approx(
@@ -265,3 +265,29 @@ def test_refusal_without_text_saves_no_empty_turn(store):
     assert [m["role"] for m, _ in store.load_messages("cli")] == ["user"]
     agent.respond("cli", "q2")
     assert all(m.get("content") for m in client.messages.calls[1]["messages"])
+
+
+def test_truncated_tool_call_is_not_saved_and_chat_keeps_working(store):
+    toolbox = StubToolbox()
+    agent, client = make_agent(
+        store,
+        [
+            msg([text("Creating it."), tool_use("toolu_1", "listening_stats", {"period": "t"})],
+                "max_tokens"),
+            msg([text("fine")]),
+        ],
+        toolbox,
+    )
+    reply = agent.respond("cli", "huge playlist please")
+    assert "too large" in reply
+    assert toolbox.calls == []  # a cut-off tool call is never executed
+    agent.respond("cli", "next")
+    sent = client.messages.calls[1]["messages"]
+    tool_uses = [
+        b for m in sent if m["role"] == "assistant" for b in m["content"] if b["type"] == "tool_use"
+    ]
+    assert tool_uses == []
+
+
+def test_max_tokens_is_generous():
+    assert ag.MAX_TOKENS >= 16000
