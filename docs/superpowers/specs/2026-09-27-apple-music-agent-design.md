@@ -133,7 +133,7 @@ Runs every 10 minutes (launchd job, or the built-in scheduler in `run`), and on 
 | Tool | Parameters | Returns |
 |---|---|---|
 | `listening_stats` | `period` or `start`/`end`; optional `genre_family`, `genres` | plays, distinct tracks, distinct artists, top 5 tracks/artists/genres, `plays_counted_since`, `has_approx_times`, `distinct_is_lower_bound` (closed past window starting before install: distinct counts/rankings may miss songs replayed later), `plays_near_boundary` (approximate repeat plays whose uncertainty window starts before the period), `now` |
-| `played_tracks` | same filters + `limit` (default 200) | list of `{id, name, artist, album, genre, plays_in_range, last_played}` |
+| `played_tracks` | same filters + `limit` (default 200) | list of `{id, name, artist, album, genre, plays_in_range, last_played}` plus the same completeness fields as `listening_stats` (`plays_is_lower_bound`, `plays_counted_since`, `distinct_is_lower_bound`), so playlists from incomplete past windows are flagged |
 | `all_time_top` | `by` ∈ {track, artist, genre}, `limit` | ranked list with lifetime play counts |
 | `list_genres` | optional `period` | genres with track/play counts and their family |
 | `search_library` | optional `query`, `artist`, `genre`, `limit` | matching tracks |
