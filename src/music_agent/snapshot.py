@@ -106,8 +106,10 @@ def run_snapshot(
 
     with store.transaction() as conn:
         now = clock()
-        stored = st.load_active_tracks(conn)
-        if not live and stored:
+        # Diff against every stored track, removed ones included: a track missing from one
+        # (partial) read keeps its counts when it comes back instead of looking brand new.
+        stored = st.load_all_tracks(conn)
+        if not live and st.load_active_tracks(conn):
             error = "Music.app returned 0 tracks; skipping this snapshot"
             st.record_snapshot(conn, now, 0, 0, int((time.monotonic() - started) * 1000), error)
             log.error("snapshot failed: %s", error)

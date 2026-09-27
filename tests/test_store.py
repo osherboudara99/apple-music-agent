@@ -90,3 +90,16 @@ def test_meta(store):
     with store.connect() as conn:
         assert st.get_meta(conn, "install_at") == "y"
         assert st.get_meta(conn, "missing") is None
+
+
+def test_load_all_tracks_includes_removed_and_removal_time_is_kept(store):
+    with store.transaction() as conn:
+        st.upsert_tracks(conn, [make_track("A"), make_track("B")], dt("2026-09-27T00:00:00"))
+        st.mark_removed(conn, ["A"], dt("2026-09-27T01:00:00"))
+        st.mark_removed(conn, ["A"], dt("2026-09-27T02:00:00"))
+    with store.connect() as conn:
+        assert set(st.load_all_tracks(conn)) == {"A", "B"}
+        removed_at = conn.execute(
+            "SELECT removed_at FROM tracks WHERE persistent_id = 'A'"
+        ).fetchone()[0]
+    assert removed_at == "2026-09-27T01:00:00+00:00"

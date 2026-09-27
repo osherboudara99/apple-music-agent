@@ -119,3 +119,27 @@ def test_stale_read_committed_late_does_not_double_count(store):
     run_snapshot(store, lambda: stale, clock)  # A: older read commits late
     run_snapshot(store, lambda: fresh, clock)  # next regular snapshot
     assert plays(store) == 1
+
+
+def test_track_missing_from_one_read_keeps_its_history_when_it_returns(store):
+    clock = ticking_clock()
+    b = make_track("B", played_count=1)
+    run_snapshot(store, lambda: [make_track("A", played_count=5), b], clock)
+    run_snapshot(store, lambda: [b], clock)  # partial read: A missing -> marked removed
+    with store.connect() as conn:
+        assert "A" not in st.load_active_tracks(conn)
+    back = make_track("A", played_count=7, played_date=dt("2026-09-27T18:01:30"))
+    result = run_snapshot(store, lambda: [back, b], clock)
+    assert result.events_added == 2  # both plays counted, not treated as a brand-new track
+    with store.connect() as conn:
+        assert "A" in st.load_active_tracks(conn)
+
+
+def test_returning_track_with_lower_count_is_not_phantom(store):
+    clock = ticking_clock()
+    b = make_track("B")
+    run_snapshot(store, lambda: [make_track("A", played_count=9), b], clock)
+    run_snapshot(store, lambda: [b], clock)
+    run_snapshot(store, lambda: [make_track("A", played_count=0), b], clock)
+    run_snapshot(store, lambda: [make_track("A", played_count=9), b], clock)
+    assert plays(store) == 0

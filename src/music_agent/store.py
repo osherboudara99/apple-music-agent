@@ -178,6 +178,12 @@ def load_active_tracks(conn: sqlite3.Connection) -> dict[str, Track]:
     return {row["persistent_id"]: _row_to_track(row) for row in rows}
 
 
+def load_all_tracks(conn: sqlite3.Connection) -> dict[str, Track]:
+    """Every track ever seen, including removed ones (so a returning track keeps its counts)."""
+    rows = conn.execute("SELECT * FROM tracks")
+    return {row["persistent_id"]: _row_to_track(row) for row in rows}
+
+
 def upsert_tracks(conn: sqlite3.Connection, tracks: list[Track], seen_at: datetime) -> None:
     conn.executemany(
         """
@@ -203,7 +209,7 @@ def upsert_tracks(conn: sqlite3.Connection, tracks: list[Track], seen_at: dateti
 
 def mark_removed(conn: sqlite3.Connection, ids: list[str], at: datetime) -> None:
     conn.executemany(
-        "UPDATE tracks SET removed_at = ? WHERE persistent_id = ?",
+        "UPDATE tracks SET removed_at = ? WHERE persistent_id = ? AND removed_at IS NULL",
         [(to_iso(at), pid) for pid in ids],
     )
 
