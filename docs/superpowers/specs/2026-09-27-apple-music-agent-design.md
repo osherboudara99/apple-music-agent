@@ -104,13 +104,14 @@ Data folder: `~/Library/Application Support/music-agent/` (`config.toml`, `plays
 Runs every 10 minutes (launchd job, or the built-in scheduler in `run`), and on demand (throttled to at most once per 60s) before any tool call that touches the last 24 hours.
 
 1. Bulk-read all library tracks, plus a second read of the track ids. Reject the read (recorded as a failed snapshot, retried next time) if the property columns don't line up or the ids changed mid-read.
+   A read that returns 0 tracks is always a failed snapshot (never a baseline).
 2. For each track, compare with its stored row:
 
 | Situation | Action |
 |---|---|
 | First ever run | Store baseline; record no events; set `meta.install_at`. |
 | `played_count` rose by N > 0 | Insert N events. If `played_date` advanced: newest `played_at = played_date`, `approx = 0`. Otherwise, and for the other N−1: `played_at = played_date` (or *now* if it didn't advance; never back-dated), `window_start = previous snapshot time`, `approx = 1`. |
-| New track (not stored) with `played_count > 0` and `played_date > previous snapshot time` | Insert 1 event (`approx = 0`). |
+| New track (not stored) with `played_count > 0` and `played_date > previous snapshot time` | Insert 1 exact event at `played_date`, plus `played_count − 1` approximate events whose window starts at `date_added` (never after `played_date`). |
 | New track otherwise | Baseline only. |
 | `played_count` decreased | **High-water mark:** keep the stored count and date (metadata still updates); no events; log a warning. A lower count is usually a transient or misaligned read, and storing it would turn the restore into phantom plays. Cost: after a genuine decrease, plays aren't counted until the count passes the old value. |
 | Track missing from library | Set `removed_at` (first time only); keep the row. Snapshots diff against every stored row, removed ones included, so a track missing from one partial read keeps its counts when it returns: its plays are counted and no phantom plays appear. |
@@ -131,7 +132,7 @@ Runs every 10 minutes (launchd job, or the built-in scheduler in `run`), and on 
 
 | Tool | Parameters | Returns |
 |---|---|---|
-| `listening_stats` | `period` or `start`/`end`; optional `genre_family`, `genres` | plays, distinct tracks, distinct artists, top 5 tracks/artists/genres, `plays_counted_since`, `has_approx_times`, `plays_near_boundary` (approximate repeat plays whose uncertainty window starts before the period), `now` |
+| `listening_stats` | `period` or `start`/`end`; optional `genre_family`, `genres` | plays, distinct tracks, distinct artists, top 5 tracks/artists/genres, `plays_counted_since`, `has_approx_times`, `distinct_is_lower_bound` (closed past window starting before install: distinct counts/rankings may miss songs replayed later), `plays_near_boundary` (approximate repeat plays whose uncertainty window starts before the period), `now` |
 | `played_tracks` | same filters + `limit` (default 200) | list of `{id, name, artist, album, genre, plays_in_range, last_played}` |
 | `all_time_top` | `by` ∈ {track, artist, genre}, `limit` | ranked list with lifetime play counts |
 | `list_genres` | optional `period` | genres with track/play counts and their family |
