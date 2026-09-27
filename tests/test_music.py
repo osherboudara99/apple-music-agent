@@ -108,7 +108,7 @@ def test_create_playlist_builds_payload_and_parses_result():
     args = calls[0]
     assert args[3].endswith("jxa/create_playlist.js")
     payload = json.loads(args[4])
-    assert payload.pop("temp_name").startswith("music-agent building ")
+    assert "temp_name" not in payload  # final name is chosen before creation; never renamed
     assert payload == {
         "name": "Rock",
         "fallback_name": "Rock (Sep 27)",
@@ -135,42 +135,6 @@ def test_run_jxa_timeout_becomes_music_error():
     assert "didn't respond" in str(info.value)
 
 
-def test_create_playlist_builds_under_unique_temp_name():
-    calls = []
-    out = json.dumps({"name": "Rock", "persistent_id": "P", "track_count": 1, "missing_ids": []})
-    runner = fake_runner(stdout=out, calls=calls)
-    music.create_playlist("Rock", ["A"], "Music Agent", "Rock (x)", runner=runner)
-    music.create_playlist("Rock", ["A"], "Music Agent", "Rock (x)", runner=runner)
-    first, second = (json.loads(c[4])["temp_name"] for c in calls)
-    assert first.startswith("music-agent building ") and first != second
-
-
-def test_create_playlist_timeout_deletes_only_its_temp_playlist():
-    calls = []
-
-    def runner(args):
-        calls.append(args)
-        if args[3].endswith("create_playlist.js"):
-            raise subprocess.TimeoutExpired(args, 300)
-        return subprocess.CompletedProcess(args, 0, "1", "")
-
-    with pytest.raises(music.MusicError, match="nothing was created"):
-        music.create_playlist("Rock", ["A"], "Music Agent", "Rock (x)", runner=runner)
-    temp_name = json.loads(calls[0][4])["temp_name"]
-    assert calls[1][3].endswith("jxa/delete_temp_playlist.js")
-    assert calls[1][4:] == [temp_name]
-
-
-def test_create_playlist_timeout_reports_leftover_if_cleanup_fails():
-    def runner(args):
-        if args[3].endswith("create_playlist.js"):
-            raise subprocess.TimeoutExpired(args, 300)
-        return subprocess.CompletedProcess(args, 1, "", "execution error: boom (-1)")
-
-    with pytest.raises(music.MusicError, match="music-agent building"):
-        music.create_playlist("Rock", ["A"], "Music Agent", "Rock (x)", runner=runner)
-
-
 def test_default_runner_uses_utf8(monkeypatch):
     seen = {}
 
@@ -183,14 +147,44 @@ def test_default_runner_uses_utf8(monkeypatch):
     assert seen["encoding"] == "utf-8" and seen["check"] is False and seen["timeout"] > 0
 
 
-def test_timeout_after_rename_warns_playlist_may_exist():
-    def runner(args):
-        if args[3].endswith("create_playlist.js"):
-            raise subprocess.TimeoutExpired(args, 300)
-        return subprocess.CompletedProcess(args, 0, "0\n", "")  # cleanup deleted nothing
 
+def _timeout_runner(stderr_before_kill, cleanup_stdout="1", cleanup_rc=0, calls=None):
+    def runner(args):
+        if calls is not None:
+            calls.append(args)
+        if args[3].endswith("create_playlist.js"):
+            raise subprocess.TimeoutExpired(args, 300, output=None, stderr=stderr_before_kill)
+        return subprocess.CompletedProcess(args, cleanup_rc, cleanup_stdout, "boom (-1)")
+
+    return runner
+
+
+def test_timeout_after_creation_deletes_exactly_that_playlist():
+    calls = []
+    runner = _timeout_runner(b"MUSIC_AGENT_PLAYLIST_ID=ABCDEF0123456789\n", calls=calls)
+    with pytest.raises(music.MusicError, match="nothing was kept"):
+        music.create_playlist("Rock", ["A"], "Music Agent", "Rock (x)", runner=runner)
+    assert calls[1][3].endswith("jxa/delete_created_playlist.js")
+    assert calls[1][4:] == ["ABCDEF0123456789", "Music Agent"]
+
+
+def test_timeout_before_creation_created_nothing():
+    calls = []
+    with pytest.raises(music.MusicError, match="nothing was created"):
+        music.create_playlist(
+            "Rock", ["A"], "Music Agent", "Rock (x)", runner=_timeout_runner(b"", calls=calls)
+        )
+    assert len(calls) == 1  # no cleanup needed
+
+
+def test_timeout_cleanup_that_deletes_nothing_warns_playlist_may_exist():
+    runner = _timeout_runner("MUSIC_AGENT_PLAYLIST_ID=ABCDEF0123456789\n", cleanup_stdout="0")
     with pytest.raises(music.MusicError) as info:
         music.create_playlist("Rock", ["A"], "Music Agent", "Rock (x)", runner=runner)
-    text = str(info.value)
-    assert "nothing was created" not in text
-    assert '"Rock"' in text and "may already exist" in text
+    assert '"Rock"' in str(info.value) and "may already exist" in str(info.value)
+
+
+def test_timeout_cleanup_failure_warns_playlist_may_exist():
+    runner = _timeout_runner(b"MUSIC_AGENT_PLAYLIST_ID=ABCDEF0123456789\n", cleanup_rc=1)
+    with pytest.raises(music.MusicError, match="may already exist"):
+        music.create_playlist("Rock", ["A"], "Music Agent", "Rock (x)", runner=runner)

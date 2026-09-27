@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,14 +23,20 @@ PERMISSION_HELP = (
 
 
 JXA_TIMEOUT_S = 300
-TEMP_PREFIX = "music-agent building "
 
 
 class MusicError(RuntimeError):
-    def __init__(self, message: str, code: int | None = None, timed_out: bool = False):
+    def __init__(
+        self,
+        message: str,
+        code: int | None = None,
+        timed_out: bool = False,
+        output: str | bytes | None = None,
+    ):
         super().__init__(message)
         self.code = code
         self.timed_out = timed_out
+        self.output = output  # stderr captured before a timeout kill, if any
 
     @property
     def permission_denied(self) -> bool:
@@ -50,7 +55,9 @@ def run_jxa(script: str, *args: str, runner: Runner | None = None) -> str:
         proc = run(["osascript", "-l", "JavaScript", str(JXA_DIR / script), *args])
     except subprocess.TimeoutExpired as exc:
         raise MusicError(
-            f"Music.app didn't respond within {JXA_TIMEOUT_S} seconds.", timed_out=True
+            f"Music.app didn't respond within {JXA_TIMEOUT_S} seconds.",
+            timed_out=True,
+            output=exc.stderr,
         ) from exc
     if proc.returncode != 0:
         text = (proc.stderr or "").strip()
@@ -105,6 +112,14 @@ class PlaylistResult:
     missing_ids: list[str]
 
 
+def _created_playlist_id(output: str | bytes | None) -> str | None:
+    """The id create_playlist.js prints to stderr right after creating the playlist."""
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", "replace")
+    match = re.search(r"MUSIC_AGENT_PLAYLIST_ID=([0-9A-F]{16})", output or "")
+    return match.group(1) if match else None
+
+
 def create_playlist(
     name: str,
     track_ids: list[str],
@@ -118,12 +133,10 @@ def create_playlist(
         raise ValueError("Playlist name is empty.")
     if not ids:
         raise ValueError("No tracks to add to the playlist.")
-    temp_name = f"{TEMP_PREFIX}{uuid.uuid4().hex[:12]}"
     payload = json.dumps(
         {
             "name": name.strip(),
             "fallback_name": fallback_name,
-            "temp_name": temp_name,
             "folder": folder,
             "description": description,
             "track_ids": ids,
@@ -135,25 +148,28 @@ def create_playlist(
     except MusicError as exc:
         if not exc.timed_out:
             raise
+        pid = _created_playlist_id(exc.output)
+        if pid is None:
+            raise MusicError(
+                "Music.app timed out before creating the playlist, so nothing was created. "
+                "Try again.",
+                timed_out=True,
+            ) from exc
+        may_exist = MusicError(
+            f"Music.app timed out while building the playlist. It may already exist as "
+            f"\"{name.strip()}\" (or \"{fallback_name}\") in the \"{folder}\" folder; "
+            "check before retrying.",
+            timed_out=True,
+        )
         try:
-            deleted = run_jxa("delete_temp_playlist.js", temp_name, runner=runner).strip()
+            deleted = run_jxa("delete_created_playlist.js", pid, folder, runner=runner).strip()
         except MusicError:
-            raise MusicError(
-                f"Music.app timed out building the playlist. A partial playlist named "
-                f"\"{temp_name}\" may be in the \"{folder}\" folder; delete it if so.",
-                timed_out=True,
-            ) from exc
-        if deleted == "0":
-            # The build had already been renamed when it timed out: the playlist may exist.
-            raise MusicError(
-                f"Music.app timed out while finishing the playlist. It may already exist as "
-                f"\"{name.strip()}\" (or \"{fallback_name}\") in the \"{folder}\" folder; "
-                "check before retrying.",
-                timed_out=True,
-            ) from exc
+            raise may_exist from exc
+        if deleted != "1":
+            raise may_exist from exc
         raise MusicError(
-            "Music.app timed out building the playlist, so nothing was created. "
-            "Try fewer tracks.",
+            "Music.app timed out building the playlist; the partial playlist was removed, "
+            "so nothing was kept. Try fewer tracks.",
             timed_out=True,
         ) from exc
     return PlaylistResult(
