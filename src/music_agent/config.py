@@ -95,6 +95,9 @@ def load_config() -> Config:
     values = {}
     for key, value in raw.items():
         expected = _TYPES[key]
+        if expected is str and not isinstance(value, str):
+            # str() would silently turn `true` or a list into text like "True" or "['x']".
+            raise ConfigError(f"{key} in {path} must be text, got {value!r}")
         if expected in (int, float) and isinstance(value, bool):
             # bool is an int subclass: `true` would silently become 1 (e.g. user id 1).
             raise ConfigError(f"{key} in {path} must be a number, got {value!r}")

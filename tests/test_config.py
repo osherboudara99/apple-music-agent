@@ -142,3 +142,14 @@ def test_booleans_are_rejected_for_numeric_settings(line):
     cfg.config_path().write_text(f'timezone = "UTC"\n{line}\n')
     with pytest.raises(cfg.ConfigError, match=line.split(" ")[0]):
         cfg.load_config()
+
+
+@pytest.mark.parametrize(
+    "line", ["model = true", 'playlist_folder = ["Music Agent"]', "timezone = 5"],
+)
+def test_non_strings_are_rejected_for_text_settings(line):
+    cfg.config_path().parent.mkdir(parents=True, exist_ok=True)
+    body = line if line.startswith("timezone") else f'timezone = "UTC"\n{line}'
+    cfg.config_path().write_text(body + "\n")
+    with pytest.raises(cfg.ConfigError, match=line.split(" ")[0]):
+        cfg.load_config()
