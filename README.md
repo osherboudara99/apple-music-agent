@@ -29,11 +29,11 @@ uv run music-agent snapshot                         # records a baseline; approv
 uv run music-agent chat
 ```
 
-Other commands: `ask "<question>"`, `snapshot`, `status`, `run` (Telegram).
+Other commands: `ask "<question>"`, `snapshot`, `status`, `run` (Telegram), `service install|uninstall|status` (background recording).
 
 ## Why snapshots?
 
-Music.app keeps no listening history, only each song's total play count and last-played date. music-agent takes a snapshot every 10 minutes and compares counts, which builds the history Apple doesn't keep. Counting distinct songs works from day one. **Repeat-play counts and past windows ("last Tuesday") only count from the first snapshot.** Keep `music-agent run` going, or run `music-agent snapshot` regularly (Phase 2 adds a background service).
+Music.app keeps no listening history, only each song's total play count and last-played date. music-agent takes a snapshot every 10 minutes and compares counts, which builds the history Apple doesn't keep. Counting distinct songs works from day one. **Repeat-play counts and past windows ("last Tuesday") only count from the first snapshot.** Turn on background recording once with `uv run music-agent service install`: launchd then takes a snapshot every 10 minutes and at login, even when nothing else is running. If the Mac sleeps, the missed run happens when it wakes. `music-agent service status` shows whether it's on, and `service uninstall` turns it off (it won't come back at login). If you set up Telegram, run `service install` again to also start the bot at login. On a laptop it keeps the Mac awake while plugged in.
 
 ## Telegram (optional)
 

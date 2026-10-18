@@ -278,6 +278,6 @@ Each step checks whether it's already done and skips if so.
 ## Open items to verify during implementation
 
 1. JXA can create a folder playlist and create playlists inside it.
-2. launchd-run `osascript` gets (or can be granted) the Automation permission for Music. `doctor` must detect and explain failure either way.
+2. ~~launchd-run `osascript` gets the Automation permission for Music~~ Verified 2026-10-18: a launchd-started `music-agent snapshot` read the library with exit 0 and no prompt on the author's Mac. Other Macs may see a one-time prompt; `doctor` must detect and explain a denial. `~/Library/LaunchAgents` may not exist and must be created.
 3. Sync lag for CarPlay and Windows plays (measured passively via `detected_at`).
 4. PyPI trusted publishing requires a one-time pending-publisher setup on pypi.org by the repo owner.
