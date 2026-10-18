@@ -33,6 +33,9 @@ NO_KEY_MSG = (
     "or export MUSIC_AGENT_ANTHROPIC_API_KEY. (A generic ANTHROPIC_API_KEY is ignored on purpose.)"
 )
 CLI_CHAT_ID = "cli"
+JOB_LOG_NAMES = ("snapshot.out.log", "snapshot.err.log", "bot.out.log", "bot.err.log")
+JOB_LOG_MAX_BYTES = 1_000_000
+JOB_LOG_KEEP_BYTES = 200_000
 ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 UNEXPECTED_MSG = "Something went wrong on my side; details are in the log. Try again."
 
@@ -52,6 +55,22 @@ def setup_logging(verbose: bool = False) -> None:
     # HTTP clients log full request URLs at INFO, and Telegram URLs contain the bot token.
     for noisy in ("httpx", "httpx2", "httpcore", "telegram", "apscheduler"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+def trim_job_logs() -> None:
+    """launchd appends job output to these files forever; keep only the recent tail."""
+    for name in JOB_LOG_NAMES:
+        path = log_dir() / name
+        try:
+            if path.stat().st_size <= JOB_LOG_MAX_BYTES:
+                continue
+            with path.open("rb") as f:
+                f.seek(-JOB_LOG_KEEP_BYTES, 2)
+                tail = f.read()
+            newline = tail.find(b"\n")
+            path.write_bytes(tail[newline + 1 :] if newline != -1 else tail)
+        except OSError:
+            continue
 
 
 def build_agent(config: Config, store: Store, api_key: str) -> Agent:
@@ -78,7 +97,10 @@ def format_status(
 
     last = summary["last_snapshot"]
     if last is None:
-        return "No snapshots yet. Run `music-agent snapshot` to record a baseline."
+        text = "No snapshots yet. Run `music-agent snapshot` to record a baseline."
+        if services is not None:
+            text += "\n" + format_service_status(services, config)
+        return text
     lines = [f"Tracks in library: {summary['track_count']:,}"]
     if summary["install_at"]:
         lines.append(f"Recording plays since: {when(summary['install_at'])}")
@@ -101,8 +123,11 @@ def format_status(
 
 def format_service_status(statuses: list[service.JobStatus], config: Config) -> str:
     by_label = {s.label: s for s in statuses}
+    logs = log_dir()
     snap = by_label[service.SNAPSHOT_LABEL]
-    if snap.installed and not snap.program_exists:
+    if snap.error:
+        snap_line = f"Background snapshots: state unknown (launchctl failed: {snap.error})"
+    elif snap.installed and not snap.program_exists:
         snap_line = (
             f"Background snapshots: broken. The job runs {snap.program}, which no longer "
             "exists; run `music-agent service install` again from where music-agent is now."
@@ -115,19 +140,29 @@ def format_service_status(statuses: list[service.JobStatus], config: Config) -> 
     elif snap.last_exit not in (None, 0):
         snap_line = (
             f"Background snapshots: on, but the last run failed (exit {snap.last_exit}); "
-            "see logs/snapshot.err.log"
+            f"see {logs / 'snapshot.err.log'}"
         )
     else:
-        snap_line = f"Background snapshots: on (every {config.snapshot_interval_minutes} minutes)"
+        minutes = (snap.interval_s // 60) if snap.interval_s else config.snapshot_interval_minutes
+        snap_line = f"Background snapshots: on (every {minutes} minutes)"
+        if minutes != config.snapshot_interval_minutes:
+            snap_line += (
+                f"; config says {config.snapshot_interval_minutes}, run "
+                "`music-agent service install` to apply it"
+            )
     bot = by_label[service.BOT_LABEL]
-    if not bot.installed:
+    if bot.error:
+        bot_line = f"Telegram bot service: state unknown (launchctl failed: {bot.error})"
+    elif not bot.installed:
         bot_line = "Telegram bot service: not installed"
     elif not bot.program_exists:
         bot_line = f"Telegram bot service: broken ({bot.program} no longer exists)"
     elif bot.running:
         bot_line = "Telegram bot service: running"
     else:
-        bot_line = "Telegram bot service: installed but not running; see logs/bot.err.log"
+        bot_line = (
+            f"Telegram bot service: installed but not running; see {logs / 'bot.err.log'}"
+        )
     return f"{snap_line}\n{bot_line}"
 
 
@@ -272,6 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Config error: {exc}", file=sys.stderr)
         return 2
     setup_logging(args.verbose)
+    trim_job_logs()
     store = Store(db_path())
 
     if args.command == "snapshot":

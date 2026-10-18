@@ -63,7 +63,8 @@ class BotLogic:
                 (
                     f"Your Telegram user ID is {user_id}. To let this account use the bot, add\n"
                     f"telegram_allowed_user_id = {user_id}\n"
-                    "to config.toml and restart `music-agent run`."
+                    "to config.toml and restart `music-agent run` (or run `music-agent service "
+                    "install` again if the bot runs in the background)."
                 )
             ]
         if not self.is_allowed(user_id):
@@ -130,6 +131,16 @@ class SnapshotScheduler:
         self._thread.join(timeout=5)
 
 
+def _bot_service_running() -> bool:
+    """Two pollers on one bot token conflict (Telegram returns 409), so check first."""
+    from . import service as service_mod
+
+    try:
+        return any(s.label == service_mod.BOT_LABEL and s.running for s in service_mod.status())
+    except Exception:  # noqa: BLE001 - if launchd can't be asked, don't block a manual run
+        return False
+
+
 def run_bot(
     config: Config, store: Store, no_scheduler: bool = False, service: bool = False
 ) -> int:
@@ -144,6 +155,13 @@ def run_bot(
     key = _require_key()
     if not key:
         return not_configured
+    if not service and _bot_service_running():
+        print(
+            "The Telegram bot is already running in the background (music-agent service). "
+            "Use it as is, or stop it with `music-agent service uninstall` first.",
+            file=sys.stderr,
+        )
+        return 2
     logic = BotLogic(
         build_agent(config, store, key),
         config.telegram_allowed_user_id,

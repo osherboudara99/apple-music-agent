@@ -293,3 +293,51 @@ def test_service_install_needs_both_keys_in_keychain_for_the_bot(fake_service):
     set_secret("telegram_bot_token", "123:abc")  # no Anthropic key stored
     assert cli.main(["service", "install"]) == 0
     assert fake_service["install"] is False
+
+
+def test_status_shows_installed_interval_and_mismatch():
+    cfg = Config(timezone="UTC")  # 10 minutes in config
+    snap = service.JobStatus(service.SNAPSHOT_LABEL, True, True, False, 0, "/x", True, 1800)
+    text = cli.format_service_status([snap, job(service.BOT_LABEL, False, False, False, None)], cfg)
+    assert "every 30 minutes" in text and "config says 10" in text
+    assert "music-agent service install" in text
+
+
+def test_status_shows_full_log_paths(isolated_home):
+    from music_agent.config import log_dir
+
+    failing = cli.format_service_status(
+        [job(service.SNAPSHOT_LABEL, last_exit=1), job(service.BOT_LABEL, False, False, False, None)],
+        Config(timezone="UTC"),
+    )
+    assert str(log_dir() / "snapshot.err.log") in failing
+
+
+def test_status_when_launchctl_fails():
+    broken = service.JobStatus(service.SNAPSHOT_LABEL, True, False, False, None, "/x", True, None,
+                               "timed out")
+    text = cli.format_service_status(
+        [broken, service.JobStatus(service.BOT_LABEL, False, False, False, None, None, True, None,
+                                   "timed out")],
+        Config(timezone="UTC"),
+    )
+    assert "state unknown" in text and "timed out" in text
+
+
+def test_status_before_first_snapshot_still_shows_service(capsys):
+    assert cli.main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "No snapshots yet" in out and "Background snapshots: off" in out
+
+
+def test_job_output_logs_are_trimmed(monkeypatch, isolated_home):
+    from music_agent.config import log_dir
+
+    log_dir().mkdir(parents=True, exist_ok=True)
+    big = log_dir() / "snapshot.out.log"
+    big.write_text("old line\n" * 200_000 + "LAST LINE\n")  # ~1.8 MB
+    monkeypatch.setattr(music, "read_library", lambda: [make_track("A", played_count=1)])
+    assert cli.main(["snapshot"]) == 0
+    text = big.read_text()
+    assert big.stat().st_size <= cli.JOB_LOG_KEEP_BYTES + 200
+    assert text.rstrip().endswith("LAST LINE") and text.startswith("old line")

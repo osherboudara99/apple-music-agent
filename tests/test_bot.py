@@ -120,3 +120,26 @@ def test_run_bot_as_service_exits_cleanly_when_not_configured(isolated_home, cap
     code = bot.run_bot(Config(timezone="UTC"), Store(isolated_home / "plays.db"), service=True)
     assert code == 0  # launchd's KeepAlive {SuccessfulExit: false} then stops restarting it
     assert "Telegram is optional" in capsys.readouterr().err
+
+
+def test_unpaired_hint_mentions_the_service():
+    reply = logic(StubAgent(), allowed=None).handle(12345, 12345, "hello")[0]
+    assert "music-agent service install" in reply
+
+
+def test_foreground_run_refuses_while_bot_service_runs(isolated_home, monkeypatch, capsys):
+    from music_agent import service
+    from music_agent.config import set_secret
+
+    set_secret("telegram_bot_token", "123:abc")
+    set_secret("anthropic_api_key", "sk-test")
+    monkeypatch.setattr(
+        service, "status",
+        lambda: [service.JobStatus(service.SNAPSHOT_LABEL, True, True, False, 0),
+                 service.JobStatus(service.BOT_LABEL, True, True, True, None)],
+    )
+    built = []
+    monkeypatch.setattr(bot, "build_application", lambda *a: built.append(a))
+    code = bot.run_bot(Config(timezone="UTC"), Store(isolated_home / "plays.db"), no_scheduler=True)
+    assert code == 2 and built == []
+    assert "already running in the background" in capsys.readouterr().err
