@@ -35,6 +35,12 @@ Other commands: `ask "<question>"`, `snapshot`, `status`, `run` (Telegram), `ser
 
 Music.app keeps no listening history, only each song's total play count and last-played date. music-agent takes a snapshot every 10 minutes and compares counts, which builds the history Apple doesn't keep. Counting distinct songs works from day one. **Repeat-play counts and past windows ("last Tuesday") only count from the first snapshot.** Turn on background recording once with `uv run music-agent service install`: launchd then takes a snapshot every 10 minutes and at login, even when nothing else is running. If the Mac sleeps, the missed run happens when it wakes. `music-agent service status` shows whether it's on, and `service uninstall` turns it off (it won't come back at login). If you set up Telegram, run `service install` again to also start the bot at login. On a laptop it keeps the Mac awake while plugged in.
 
+Good to know about the background service:
+
+- **It keeps Music.app open.** Reading your library requires Music.app, so if you quit it, the next snapshot (within 10 minutes) opens it again. This is intentional: Music.app on the Mac has to be running for plays from your iPhone, CarPlay and other devices to sync down.
+- **It runs the copy you installed it from.** If you move or delete the project folder, or uninstall the tool, run `music-agent service uninstall` first, or `service install` again from the new location. `service status` warns when the job points at something that no longer exists.
+- **The Telegram bot reads secrets from the Keychain only.** Background jobs can't see shell variables, so `service install` only sets up the bot when both `telegram_bot_token` and `anthropic_api_key` are in the Keychain. Don't run `music-agent run` while the bot service is running: it refuses, because two copies would fight over the same bot.
+
 ## Telegram (optional)
 
 1. In Telegram, message **@BotFather**, send `/newbot`, and copy the token.

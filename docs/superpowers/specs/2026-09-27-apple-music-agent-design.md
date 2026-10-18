@@ -199,6 +199,9 @@ Each step checks whether it's already done and skips if so.
 - `io.music-agent.snapshot`: `StartInterval` = interval × 60, runs `<abs path>/music-agent snapshot`.
 - `io.music-agent.bot`: `RunAtLoad` + `KeepAlive`, runs `<abs path>/music-agent run --no-scheduler`, wrapped in `caffeinate -s` when the Mac has a battery.
 - Logs go to `~/Library/Application Support/music-agent/logs/`.
+- The snapshot job opens Music.app if it isn't running (decided 2026-10-18: Music.app must run for other devices' plays to sync). Job output logs are trimmed to their last ~200 KB once they pass 1 MB.
+- The bot job uses `KeepAlive = {SuccessfulExit: false}` and runs `run --no-scheduler --service`: a crash restarts it, but "not configured" exits 0 and stops. `service install` adds the bot only when both secrets are in the Keychain; foreground `run` refuses while the bot service is running.
+- `service status` reads launchd's real state (`last exit code = N: text`, terminating signals, `run interval`) and flags jobs whose program no longer exists.
 - The executable path is resolved at install time. `uv tool upgrade` keeps the same path, so upgrades need no reinstall.
 
 ## Error handling
