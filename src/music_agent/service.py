@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import os
+import plistlib
 import shutil
 import subprocess
 import sys
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
-from .config import Config
+from .config import Config, log_dir
 
 SNAPSHOT_LABEL = "io.music-agent.snapshot"
 BOT_LABEL = "io.music-agent.bot"
@@ -86,3 +88,104 @@ def bot_job(exe: Path, logs: Path, keep_awake: bool) -> dict:
         "StandardErrorPath": str(logs / "bot.err.log"),
         **_environment(),
     }
+
+
+def _domain() -> str:
+    return f"gui/{os.getuid()}"
+
+
+def _load(job: dict, directory: Path, run: Runner) -> None:
+    label = job["Label"]
+    directory.mkdir(parents=True, exist_ok=True)  # missing on a Mac that never had agents
+    run(["/bin/launchctl", "bootout", f"{_domain()}/{label}"])  # not loaded: ignored
+    path = plist_path(label, directory)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(plistlib.dumps(job))
+    os.replace(tmp, path)
+    proc = run(["/bin/launchctl", "bootstrap", _domain(), str(path)])
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise ServiceError(f"launchctl couldn't load {label}: {detail}")
+
+
+def _unload(label: str, directory: Path, run: Runner) -> bool:
+    run(["/bin/launchctl", "bootout", f"{_domain()}/{label}"])
+    path = plist_path(label, directory)
+    if path.exists():
+        path.unlink()
+        return True
+    return False
+
+
+@dataclass(frozen=True)
+class InstallResult:
+    installed: list[str]
+    removed: list[str]
+    keep_awake: bool
+    logs: Path
+
+
+def install(
+    config: Config,
+    telegram_configured: bool,
+    runner: Runner | None = None,
+    directory: Path | None = None,
+    exe: Path | None = None,
+    battery: bool | None = None,
+) -> InstallResult:
+    run = runner or _default_runner
+    directory = directory or agents_dir()
+    exe = exe or executable_path()
+    logs = log_dir()
+    logs.mkdir(parents=True, exist_ok=True)
+    keep_awake = has_battery(run) if battery is None else battery
+    _load(snapshot_job(exe, config, logs), directory, run)
+    installed, removed = [SNAPSHOT_LABEL], []
+    if telegram_configured:
+        _load(bot_job(exe, logs, keep_awake), directory, run)
+        installed.append(BOT_LABEL)
+    elif _unload(BOT_LABEL, directory, run):
+        removed.append(BOT_LABEL)
+    return InstallResult(installed, removed, keep_awake and telegram_configured, logs)
+
+
+def uninstall(runner: Runner | None = None, directory: Path | None = None) -> list[str]:
+    run = runner or _default_runner
+    directory = directory or agents_dir()
+    return [label for label in LABELS if _unload(label, directory, run)]
+
+
+@dataclass(frozen=True)
+class JobStatus:
+    label: str
+    installed: bool
+    loaded: bool
+    running: bool
+    last_exit: int | None
+
+
+def _parse_print(text: str) -> tuple[bool, int | None]:
+    running: bool | None = None
+    last_exit: int | None = None
+    seen_exit = False
+    for line in text.splitlines():
+        item = line.strip()
+        if running is None and item.startswith("state = "):
+            running = item == "state = running"  # first state line is the job's own
+        if not seen_exit and item.startswith("last exit code = "):
+            seen_exit = True
+            value = item.removeprefix("last exit code = ").split()[0]
+            last_exit = int(value) if value.lstrip("-").isdigit() else None
+    return bool(running), last_exit
+
+
+def status(runner: Runner | None = None, directory: Path | None = None) -> list[JobStatus]:
+    run = runner or _default_runner
+    out = []
+    for label in LABELS:
+        installed = plist_path(label, directory).exists()
+        proc = run(["/bin/launchctl", "print", f"{_domain()}/{label}"])
+        loaded = proc.returncode == 0
+        running, last_exit = _parse_print(proc.stdout or "") if loaded else (False, None)
+        out.append(JobStatus(label, installed, loaded, running, last_exit))
+    return out
