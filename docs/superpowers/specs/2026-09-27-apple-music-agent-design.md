@@ -199,6 +199,9 @@ Each step checks whether it's already done and skips if so.
 - `io.music-agent.snapshot`: `StartInterval` = interval × 60, runs `<abs path>/music-agent snapshot`.
 - `io.music-agent.bot`: `RunAtLoad` + `KeepAlive`, runs `<abs path>/music-agent run --no-scheduler`, wrapped in `caffeinate -s` when the Mac has a battery.
 - Logs go to `~/Library/Application Support/music-agent/logs/`.
+- The snapshot job opens Music.app if it isn't running (decided 2026-10-18: Music.app must run for other devices' plays to sync). Job output logs are trimmed to their last ~200 KB once they pass 1 MB.
+- The bot job uses `KeepAlive = {SuccessfulExit: false}` and runs `run --no-scheduler --service`: a crash restarts it, but "not configured" exits 0 and stops. `service install` adds the bot only when both secrets are in the Keychain; foreground `run` refuses while the bot service is running.
+- `service status` reads launchd's real state (`last exit code = N: text`, terminating signals, `run interval`) and flags jobs whose program no longer exists.
 - The executable path is resolved at install time. `uv tool upgrade` keeps the same path, so upgrades need no reinstall.
 
 ## Error handling
@@ -278,6 +281,6 @@ Each step checks whether it's already done and skips if so.
 ## Open items to verify during implementation
 
 1. JXA can create a folder playlist and create playlists inside it.
-2. launchd-run `osascript` gets (or can be granted) the Automation permission for Music. `doctor` must detect and explain failure either way.
+2. ~~launchd-run `osascript` gets the Automation permission for Music~~ Verified 2026-10-18: a launchd-started `music-agent snapshot` read the library with exit 0 and no prompt on the author's Mac. Other Macs may see a one-time prompt; `doctor` must detect and explain a denial. `~/Library/LaunchAgents` may not exist and must be created.
 3. Sync lag for CarPlay and Windows plays (measured passively via `detected_at`).
 4. PyPI trusted publishing requires a one-time pending-publisher setup on pypi.org by the repo owner.

@@ -1,6 +1,8 @@
+from pathlib import Path
+
 import pytest
 
-from music_agent import cli, music
+from music_agent import cli, music, service
 from music_agent.config import Config, set_secret
 from tests.factories import dt, make_track
 
@@ -179,3 +181,163 @@ def test_build_agent_ignores_shell_base_url(monkeypatch, isolated_home):
     client = agent.client
     assert str(client.base_url).startswith("https://api.anthropic.com")
     assert client.api_key == "sk-mine" and client.auth_token is None
+
+
+def job(label, installed=True, loaded=True, running=False, last_exit=0):
+    return service.JobStatus(label, installed, loaded, running, last_exit)
+
+
+@pytest.fixture(autouse=True)
+def no_real_launchd(monkeypatch):
+    """CLI tests never query the real launchd: `status` now includes service lines."""
+    monkeypatch.setattr(
+        service, "status",
+        lambda: [job(service.SNAPSHOT_LABEL, False, False, False, None),
+                 job(service.BOT_LABEL, False, False, False, None)],
+    )
+
+
+@pytest.fixture
+def fake_service(monkeypatch):
+    calls = {}
+
+    def install(config, telegram_configured):
+        calls["install"] = telegram_configured
+        labels = [service.SNAPSHOT_LABEL] + ([service.BOT_LABEL] if telegram_configured else [])
+        return service.InstallResult(labels, [], False, Path("/logs"))
+
+    monkeypatch.setattr(service, "install", install)
+    monkeypatch.setattr(service, "uninstall", lambda: [service.SNAPSHOT_LABEL])
+    monkeypatch.setattr(
+        service, "status",
+        lambda: [job(service.SNAPSHOT_LABEL), job(service.BOT_LABEL, False, False, False, None)],
+    )
+    return calls
+
+
+def test_service_install_without_telegram(fake_service, capsys):
+    assert cli.main(["service", "install"]) == 0
+    out = capsys.readouterr().out
+    assert fake_service["install"] is False
+    assert "every 10 minutes" in out and "/logs" in out and "Telegram" in out
+
+
+def test_service_install_with_telegram(fake_service, capsys):
+    set_secret("telegram_bot_token", "123:abc")
+    set_secret("anthropic_api_key", "sk-test")
+    assert cli.main(["service", "install"]) == 0
+    assert fake_service["install"] is True
+    assert "bot" in capsys.readouterr().out.lower()
+
+
+def test_service_install_error(monkeypatch, capsys):
+    def boom(config, telegram_configured):
+        raise service.ServiceError("launchctl couldn't load io.music-agent.snapshot: nope")
+
+    monkeypatch.setattr(service, "install", boom)
+    assert cli.main(["service", "install"]) == 1
+    assert "nope" in capsys.readouterr().err
+
+
+def test_service_uninstall(fake_service, capsys):
+    assert cli.main(["service", "uninstall"]) == 0
+    assert "Removed" in capsys.readouterr().out
+
+
+def test_service_status(fake_service, capsys):
+    assert cli.main(["service", "status"]) == 0
+    out = capsys.readouterr().out
+    assert "Background snapshots: on" in out and "Telegram bot service: not installed" in out
+
+
+def test_format_service_status_variants():
+    cfg = Config(timezone="UTC")
+    off = cli.format_service_status(
+        [job(service.SNAPSHOT_LABEL, False, False, False, None),
+         job(service.BOT_LABEL, False, False, False, None)], cfg,
+    )
+    assert "Background snapshots: off" in off and "music-agent service install" in off
+    failing = cli.format_service_status(
+        [job(service.SNAPSHOT_LABEL, last_exit=1), job(service.BOT_LABEL, running=True)], cfg
+    )
+    assert "last run failed (exit 1)" in failing and "Telegram bot service: running" in failing
+
+
+def test_status_includes_service_lines(fake_service, monkeypatch, capsys):
+    monkeypatch.setattr(music, "read_library", lambda: [make_track("A", played_count=1)])
+    cli.main(["snapshot"])
+    capsys.readouterr()
+    assert cli.main(["status"]) == 0
+    assert "Background snapshots: on" in capsys.readouterr().out
+
+
+def test_format_service_status_missing_program():
+    cfg = Config(timezone="UTC")
+    text = cli.format_service_status(
+        [service.JobStatus(service.SNAPSHOT_LABEL, True, True, False, 78, "/old/music-agent", False),
+         job(service.BOT_LABEL, False, False, False, None)], cfg,
+    )
+    assert "/old/music-agent" in text and "no longer exists" in text
+    assert "music-agent service install" in text
+
+
+def test_service_install_uses_keychain_secrets_only(fake_service, monkeypatch, capsys):
+    monkeypatch.setenv("MUSIC_AGENT_TELEGRAM_BOT_TOKEN", "123:from-shell")
+    set_secret("anthropic_api_key", "sk-test")
+    assert cli.main(["service", "install"]) == 0
+    assert fake_service["install"] is False  # the background bot can't see shell variables
+    assert "shell" in capsys.readouterr().out.lower()
+
+
+def test_service_install_needs_both_keys_in_keychain_for_the_bot(fake_service):
+    set_secret("telegram_bot_token", "123:abc")  # no Anthropic key stored
+    assert cli.main(["service", "install"]) == 0
+    assert fake_service["install"] is False
+
+
+def test_status_shows_installed_interval_and_mismatch():
+    cfg = Config(timezone="UTC")  # 10 minutes in config
+    snap = service.JobStatus(service.SNAPSHOT_LABEL, True, True, False, 0, "/x", True, 1800)
+    text = cli.format_service_status([snap, job(service.BOT_LABEL, False, False, False, None)], cfg)
+    assert "every 30 minutes" in text and "config says 10" in text
+    assert "music-agent service install" in text
+
+
+def test_status_shows_full_log_paths(isolated_home):
+    from music_agent.config import log_dir
+
+    failing = cli.format_service_status(
+        [job(service.SNAPSHOT_LABEL, last_exit=1), job(service.BOT_LABEL, False, False, False, None)],
+        Config(timezone="UTC"),
+    )
+    assert str(log_dir() / "snapshot.err.log") in failing
+
+
+def test_status_when_launchctl_fails():
+    broken = service.JobStatus(service.SNAPSHOT_LABEL, True, False, False, None, "/x", True, None,
+                               "timed out")
+    text = cli.format_service_status(
+        [broken, service.JobStatus(service.BOT_LABEL, False, False, False, None, None, True, None,
+                                   "timed out")],
+        Config(timezone="UTC"),
+    )
+    assert "state unknown" in text and "timed out" in text
+
+
+def test_status_before_first_snapshot_still_shows_service(capsys):
+    assert cli.main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "No snapshots yet" in out and "Background snapshots: off" in out
+
+
+def test_job_output_logs_are_trimmed(monkeypatch, isolated_home):
+    from music_agent.config import log_dir
+
+    log_dir().mkdir(parents=True, exist_ok=True)
+    big = log_dir() / "snapshot.out.log"
+    big.write_text("old line\n" * 200_000 + "LAST LINE\n")  # ~1.8 MB
+    monkeypatch.setattr(music, "read_library", lambda: [make_track("A", played_count=1)])
+    assert cli.main(["snapshot"]) == 0
+    text = big.read_text()
+    assert big.stat().st_size <= cli.JOB_LOG_KEEP_BYTES + 200
+    assert text.rstrip().endswith("LAST LINE") and text.startswith("old line")

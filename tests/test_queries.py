@@ -1,3 +1,4 @@
+from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -137,6 +138,9 @@ def test_track_names(store):
 
 
 def test_status_summary(store):
+    with store.transaction() as conn:  # the snapshots that ran just before each detection
+        for taken in ("2026-09-26T20:00:00", "2026-09-27T16:55:00", "2026-09-27T17:55:00"):
+            st.record_snapshot(conn, dt(taken), 5, 0, 600)
     summary = q.status_summary(store, NOW)
     assert summary["track_count"] == 5
     assert summary["plays_recorded"] == 5
@@ -210,3 +214,37 @@ def test_distinct_counts_exact_for_windows_up_to_now(store):
 def test_distinct_counts_exact_for_closed_windows_after_install(store):
     closed = resolve(None, "2026-09-21", "2026-09-26", LA, NOW)  # after install_at (Sep 20)
     assert q.listening_stats(store, closed, LA)["distinct_is_lower_bound"] is False
+
+
+def test_sync_lag_ignores_plays_found_after_a_long_pause(isolated_home):
+    s = st.Store(isolated_home / "lag.db")
+    with s.transaction() as conn:
+        st.record_snapshot(conn, dt("2026-09-27T18:00:00"), 1, 0, 600)
+        st.record_snapshot(conn, dt("2026-10-18T15:00:00"), 1, 1, 600)  # 3 weeks later
+        st.record_snapshot(conn, dt("2026-10-18T15:10:00"), 1, 1, 600)
+        st.insert_plays(
+            conn,
+            [
+                # caught up after the pause: its "lag" is the pause, not iCloud
+                PlayEvent("A", dt("2026-10-01T10:00:00"), None, dt("2026-10-18T15:00:00"), False),
+                # found by a normal 10-minute snapshot
+                PlayEvent("B", dt("2026-10-18T15:07:00"), None, dt("2026-10-18T15:10:00"), False),
+            ],
+        )
+    lag = q.status_summary(s, dt("2026-10-18T16:00:00"))["sync_lag"]
+    assert lag == {"median_min": 3.0, "p95_min": 3.0, "samples": 1}
+
+
+def test_sync_lag_gap_follows_the_configured_interval(isolated_home):
+    s = st.Store(isolated_home / "lag2.db")
+    with s.transaction() as conn:
+        st.record_snapshot(conn, dt("2026-10-18T14:00:00"), 1, 0, 600)
+        st.record_snapshot(conn, dt("2026-10-18T15:00:00"), 1, 1, 600)  # hourly cadence
+        st.insert_plays(
+            conn,
+            [PlayEvent("A", dt("2026-10-18T14:30:00"), None, dt("2026-10-18T15:00:00"), False)],
+        )
+    now = dt("2026-10-18T16:00:00")
+    assert q.status_summary(s, now)["sync_lag"] is None  # default max gap is 30 minutes
+    hourly = q.status_summary(s, now, max_gap=timedelta(hours=3))["sync_lag"]
+    assert hourly["samples"] == 1 and hourly["median_min"] == 30.0

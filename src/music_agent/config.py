@@ -132,6 +132,12 @@ def get_secret(name: str) -> str | None:
     return keyring.get_password(KEYRING_SERVICE, name)
 
 
+def get_keychain_secret(name: str) -> str | None:
+    """Keychain only. Background jobs can't see shell variables, so this is what they'll get."""
+    SECRET_ENV[name]  # raises KeyError for unknown names
+    return keyring.get_password(KEYRING_SERVICE, name)
+
+
 def set_secret(name: str, value: str) -> None:
     SECRET_ENV[name]  # raises KeyError for unknown names
     keyring.set_password(KEYRING_SERVICE, name, value)
