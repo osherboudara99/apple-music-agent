@@ -113,7 +113,12 @@ class Toolbox:
     def _refresh_for(self, period: periods.Period | None) -> dict:
         """Refresh when the window touches the last 24 hours (or is library-wide: None)."""
         if period is not None and period.end <= self.ctx.clock() - timedelta(hours=24):
-            return {}
+            # A past window only skips the refresh if a snapshot already covers its end;
+            # otherwise (scheduler stopped) the stored data may be missing plays from it.
+            with self.ctx.store.connect() as conn:
+                last = st.last_snapshot_at(conn)
+            if last is not None and last >= period.end:
+                return {}
         stale = f"Could not refresh from Music.app; {self._data_age()}"
         try:
             result = self.ctx.refresh()

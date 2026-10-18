@@ -85,10 +85,30 @@ def test_listening_stats_today_refreshes_and_adds_now(store):
     assert "warning" not in result
 
 
-def test_old_explicit_range_does_not_refresh(store):
+def test_old_range_already_covered_by_snapshots_does_not_refresh(store):
+    with store.transaction() as conn:
+        st.record_snapshot(conn, dt("2026-09-27T18:05:00"), 2, 0, 5)
     rec = Recorder()
     make_toolbox(store, rec).run("listening_stats", {"start": "2026-01-01", "end": "2026-01-31"})
     assert rec.refresh_calls == 0
+
+
+def test_old_range_after_the_last_snapshot_refreshes_first(store):
+    with store.transaction() as conn:
+        st.record_snapshot(conn, dt("2026-09-22T12:00:00"), 2, 0, 5)  # scheduler stopped
+    rec = Recorder()
+    make_toolbox(store, rec).run("listening_stats", {"start": "2026-09-20", "end": "2026-09-24"})
+    assert rec.refresh_calls == 1
+
+
+def test_stale_old_range_warns_when_refresh_fails(store):
+    with store.transaction() as conn:
+        st.record_snapshot(conn, dt("2026-09-22T12:00:00"), 2, 0, 5)
+    rec = Recorder(refresh_error=MusicError("no access", -1743))
+    result = make_toolbox(store, rec).run(
+        "played_tracks", {"start": "2026-09-20", "end": "2026-09-24"}
+    )
+    assert "2026-09-22 05:00" in result["warning"] and "5 days ago" in result["warning"]
 
 
 def test_refresh_failure_becomes_warning(store):
