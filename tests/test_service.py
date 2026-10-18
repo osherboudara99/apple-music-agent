@@ -104,12 +104,13 @@ DOMAIN = f"gui/{os.getuid()}"
 
 
 class FakeLaunchctl:
-    def __init__(self, loaded=(), bootstrap_rc=0, fail_label=None, interval=600):
+    def __init__(self, loaded=(), bootstrap_rc=0, fail_label=None, interval=600, bootout_rc=0):
         self.loaded = set(loaded)
         self.calls = []
         self.bootstrap_rc = bootstrap_rc
         self.fail_label = fail_label
         self.interval = interval
+        self.bootout_rc = bootout_rc  # simulate a real failure (e.g. 1: Operation not permitted)
 
     def __call__(self, args):
         self.calls.append(args)
@@ -118,6 +119,9 @@ class FakeLaunchctl:
         verb = args[1]
         if verb == "bootout":
             label = args[2].split("/")[-1]
+            if self.bootout_rc and label in self.loaded:
+                return subprocess.CompletedProcess(args, self.bootout_rc, "",
+                                                   "Boot-out failed: 1: Operation not permitted")
             was = label in self.loaded
             self.loaded.discard(label)
             return subprocess.CompletedProcess(args, 0 if was else 3, "", "No such process")
@@ -308,3 +312,28 @@ def test_default_runner_has_a_timeout(monkeypatch):
     real = mod._run_command
     real(["/bin/true"])
     assert seen["timeout"] > 0 and seen["check"] is False
+
+
+def test_uninstall_keeps_the_job_when_bootout_really_fails(tmp_path):
+    agents = tmp_path / "agents"
+    fake = FakeLaunchctl()
+    service.install(Config(timezone="UTC"), False, fake, agents, EXE, battery=False)
+    fake.bootout_rc = 1
+    with pytest.raises(service.ServiceError, match="Operation not permitted"):
+        service.uninstall(fake, agents)
+    assert (agents / f"{SNAPSHOT_LABEL}.plist").exists()  # still loaded, so keep its file
+    assert SNAPSHOT_LABEL in fake.loaded
+
+
+def test_reinstall_stops_when_the_old_job_cannot_be_unloaded(tmp_path):
+    agents = tmp_path / "agents"
+    fake = FakeLaunchctl()
+    service.install(Config(timezone="UTC"), False, fake, agents, EXE, battery=False)
+    before = (agents / f"{SNAPSHOT_LABEL}.plist").read_bytes()
+    fake.bootout_rc = 1
+    with pytest.raises(service.ServiceError, match="Operation not permitted"):
+        service.install(
+            Config(timezone="UTC", snapshot_interval_minutes=30), False, fake, agents, EXE,
+            battery=False,
+        )
+    assert (agents / f"{SNAPSHOT_LABEL}.plist").read_bytes() == before  # untouched

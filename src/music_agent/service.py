@@ -100,10 +100,21 @@ def _domain() -> str:
     return f"gui/{os.getuid()}"
 
 
+def _bootout(label: str, run: Runner) -> None:
+    """Unload a job. "Not loaded" is fine; any other failure means it may still be running."""
+    proc = run(["/bin/launchctl", "bootout", f"{_domain()}/{label}"])
+    detail = (proc.stderr or proc.stdout or "").strip()
+    not_loaded = proc.returncode in (3, 113) or "No such process" in detail or (
+        "Could not find service" in detail
+    )
+    if proc.returncode != 0 and not not_loaded:
+        raise ServiceError(f"launchctl couldn't unload {label}: {detail}")
+
+
 def _load(job: dict, directory: Path, run: Runner) -> None:
     label = job["Label"]
     directory.mkdir(parents=True, exist_ok=True)  # missing on a Mac that never had agents
-    run(["/bin/launchctl", "bootout", f"{_domain()}/{label}"])  # not loaded: ignored
+    _bootout(label, run)  # raises before touching the old job file if it can't be unloaded
     path = plist_path(label, directory)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_bytes(plistlib.dumps(job))
@@ -116,7 +127,7 @@ def _load(job: dict, directory: Path, run: Runner) -> None:
 
 
 def _unload(label: str, directory: Path, run: Runner) -> bool:
-    run(["/bin/launchctl", "bootout", f"{_domain()}/{label}"])
+    _bootout(label, run)  # keeps the job file if the job couldn't really be stopped
     path = plist_path(label, directory)
     if path.exists():
         path.unlink()
