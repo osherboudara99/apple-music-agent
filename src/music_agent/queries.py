@@ -283,21 +283,34 @@ def track_names(store: st.Store, ids: list[str]) -> dict[str, str]:
     return {r["persistent_id"]: f"{r['artist']} - {r['name']}" for r in rows}
 
 
-def status_summary(store: st.Store, now: datetime) -> dict:
+def status_summary(
+    store: st.Store, now: datetime, max_gap: timedelta = timedelta(minutes=30)
+) -> dict:
+    """Sync lag only counts plays found by a snapshot that ran within `max_gap` of the previous
+    one: after a long pause (Mac off, service stopped) the "lag" is the pause, not iCloud."""
     with store.connect() as conn:
-        last = conn.execute("SELECT * FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+        last = conn.execute(
+            "SELECT * FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT 1"
+        ).fetchone()
         track_count = conn.execute(
             "SELECT COUNT(*) FROM tracks WHERE removed_at IS NULL"
         ).fetchone()[0]
         plays = conn.execute("SELECT COUNT(*) FROM plays").fetchone()[0]
         lag_rows = conn.execute(
-            "SELECT played_at, detected_at FROM plays WHERE approx = 0 AND detected_at >= ?",
+            """
+            SELECT p.played_at, p.detected_at,
+                   (SELECT MAX(s.taken_at) FROM snapshots s
+                    WHERE s.error IS NULL AND s.taken_at < p.detected_at) AS prev_snapshot
+            FROM plays p WHERE p.approx = 0 AND p.detected_at >= ?
+            """,
             (st.to_iso(now - timedelta(days=30)),),
         ).fetchall()
         installed = st.from_iso(st.get_meta(conn, "install_at"))
     lags = sorted(
         max(0.0, (st.from_iso(r["detected_at"]) - st.from_iso(r["played_at"])).total_seconds() / 60)
         for r in lag_rows
+        if r["prev_snapshot"] is not None
+        and st.from_iso(r["detected_at"]) - st.from_iso(r["prev_snapshot"]) <= max_gap
     )
     sync_lag = None
     if lags:

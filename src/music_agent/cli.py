@@ -7,6 +7,7 @@ import logging
 import logging.handlers
 import sys
 import uuid
+from datetime import timedelta
 
 import anthropic
 
@@ -211,7 +212,9 @@ def _cmd_service(action: str, config: Config) -> int:
 def _status_text(config: Config, store: Store) -> str:
     now = utcnow()
     spent = store.spend_since(month_start(now, config.tz))
-    return format_status(queries.status_summary(store, now), spent, config, service.status())
+    max_gap = timedelta(minutes=3 * config.snapshot_interval_minutes)
+    summary = queries.status_summary(store, now, max_gap)
+    return format_status(summary, spent, config, service.status())
 
 
 def _cmd_snapshot(store: Store) -> int:
