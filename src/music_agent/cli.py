@@ -12,7 +12,15 @@ import anthropic
 
 from . import music, queries, service
 from .agent import Agent, month_start
-from .config import Config, ConfigError, db_path, get_secret, load_config, log_dir
+from .config import (
+    Config,
+    ConfigError,
+    db_path,
+    get_keychain_secret,
+    get_secret,
+    load_config,
+    log_dir,
+)
 from .models import utcnow
 from .snapshot import maybe_snapshot, run_snapshot
 from .store import Store
@@ -94,7 +102,12 @@ def format_status(
 def format_service_status(statuses: list[service.JobStatus], config: Config) -> str:
     by_label = {s.label: s for s in statuses}
     snap = by_label[service.SNAPSHOT_LABEL]
-    if not (snap.installed and snap.loaded):
+    if snap.installed and not snap.program_exists:
+        snap_line = (
+            f"Background snapshots: broken. The job runs {snap.program}, which no longer "
+            "exists; run `music-agent service install` again from where music-agent is now."
+        )
+    elif not (snap.installed and snap.loaded):
         snap_line = (
             "Background snapshots: off (plays are only recorded while a command runs). "
             "Turn on with `music-agent service install`."
@@ -109,6 +122,8 @@ def format_service_status(statuses: list[service.JobStatus], config: Config) -> 
     bot = by_label[service.BOT_LABEL]
     if not bot.installed:
         bot_line = "Telegram bot service: not installed"
+    elif not bot.program_exists:
+        bot_line = f"Telegram bot service: broken ({bot.program} no longer exists)"
     elif bot.running:
         bot_line = "Telegram bot service: running"
     else:
@@ -119,7 +134,20 @@ def format_service_status(statuses: list[service.JobStatus], config: Config) -> 
 def _cmd_service(action: str, config: Config) -> int:
     try:
         if action == "install":
-            telegram = bool(get_secret("telegram_bot_token"))
+            # The background bot reads the Keychain only (launchd jobs don't see shell variables).
+            token = get_keychain_secret("telegram_bot_token")
+            key = get_keychain_secret("anthropic_api_key")
+            telegram = bool(token and key)
+            if not token and get_secret("telegram_bot_token"):
+                print(
+                    "Your Telegram token is only set in your shell; the background bot can't "
+                    "see it. Store it with: uv run keyring set music-agent telegram_bot_token"
+                )
+            elif token and not key:
+                print(
+                    "The background bot also needs your Anthropic key in the Keychain: "
+                    "uv run keyring set music-agent anthropic_api_key"
+                )
             result = service.install(config, telegram)
             print(
                 f"Background snapshots installed: every {config.snapshot_interval_minutes} "
@@ -229,6 +257,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--no-scheduler", action="store_true", help="don't take snapshots in this process"
     )
+    run.add_argument("--service", action="store_true", help=argparse.SUPPRESS)
     return parser
 
 
@@ -263,5 +292,5 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "run":
         from .bot import run_bot  # imported lazily: only `run` needs python-telegram-bot
 
-        return run_bot(config, store, no_scheduler=args.no_scheduler)
+        return run_bot(config, store, no_scheduler=args.no_scheduler, service=args.service)
     return 2

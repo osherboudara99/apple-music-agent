@@ -34,16 +34,18 @@ def test_snapshot_job(monkeypatch):
 def test_bot_job_keeps_laptops_awake():
     job = service.bot_job(EXE, LOGS, keep_awake=True)
     assert job["ProgramArguments"] == [
-        "/usr/bin/caffeinate", "-s", str(EXE), "run", "--no-scheduler",
+        "/usr/bin/caffeinate", "-s", str(EXE), "run", "--no-scheduler", "--service",
     ]
-    assert job["KeepAlive"] is True and job["RunAtLoad"] is True and job["ThrottleInterval"] == 30
+    # Restart after crashes, but not after a clean "not configured" exit (no restart loop).
+    assert job["KeepAlive"] == {"SuccessfulExit": False}
+    assert job["RunAtLoad"] is True and job["ThrottleInterval"] == 30
     assert job["Label"] == "io.music-agent.bot"
     assert job["StandardErrorPath"] == str(LOGS / "bot.err.log")
 
 
 def test_bot_job_on_desktop_runs_directly():
     assert service.bot_job(EXE, LOGS, keep_awake=False)["ProgramArguments"] == [
-        str(EXE), "run", "--no-scheduler",
+        str(EXE), "run", "--no-scheduler", "--service",
     ]
 
 
@@ -203,11 +205,38 @@ def test_uninstall_when_nothing_is_installed(tmp_path):
 
 
 def test_status(tmp_path):
+    exe = tmp_path / "music-agent"
+    exe.write_text("#!/bin/sh\n")
+    agents = tmp_path / "agents"
     fake = FakeLaunchctl()
-    service.install(Config(timezone="UTC"), False, fake, tmp_path, EXE, battery=False)
-    snap, bot = service.status(fake, tmp_path)
-    assert snap == service.JobStatus(SNAPSHOT_LABEL, True, True, False, 0)
-    assert bot == service.JobStatus(BOT_LABEL, False, False, False, None)
+    service.install(Config(timezone="UTC"), False, fake, agents, exe, battery=False)
+    snap, bot = service.status(fake, agents)
+    assert snap == service.JobStatus(SNAPSHOT_LABEL, True, True, False, 0, str(exe), True)
+    assert bot == service.JobStatus(BOT_LABEL, False, False, False, None, None, True)
+
+
+def test_status_flags_a_job_whose_program_is_gone(tmp_path):
+    gone = tmp_path / "moved-clone" / "music-agent"
+    agents = tmp_path / "agents"
+    fake = FakeLaunchctl()
+    service.install(Config(timezone="UTC"), True, fake, agents, gone, battery=True)
+    snap, bot = service.status(fake, agents)
+    assert snap.program == str(gone) and snap.program_exists is False
+    assert bot.program == str(gone) and bot.program_exists is False  # caffeinate prefix skipped
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("\tstate = not running\n\tlast exit code = 78: EX_CONFIG\n", (False, 78)),
+        ("\tstate = not running\n\tlast exit code = 1: Operation not permitted\n", (False, 1)),
+        ("\tstate = not running\n\tlast exit code = 0\n", (False, 0)),
+        ("\tstate = not running\n\tlast terminating signal = Killed: 9\n", (False, -9)),
+        ("\tstate = running\n\tlast exit code = (never exited)\n", (True, None)),
+    ],
+)
+def test_parse_print_real_launchd_formats(text, expected):
+    assert service._parse_print(text) == expected
 
 
 def test_status_parses_running_and_never_exited():

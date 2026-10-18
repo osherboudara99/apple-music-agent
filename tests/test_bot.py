@@ -114,3 +114,9 @@ def test_unexpected_status_error_gets_a_reply():
 
     bot_logic = bot.BotLogic(StubAgent(), 42, broken_status)
     assert "Something went wrong" in bot_logic.handle(42, 100, "/status")[0]
+
+
+def test_run_bot_as_service_exits_cleanly_when_not_configured(isolated_home, capsys):
+    code = bot.run_bot(Config(timezone="UTC"), Store(isolated_home / "plays.db"), service=True)
+    assert code == 0  # launchd's KeepAlive {SuccessfulExit: false} then stops restarting it
+    assert "Telegram is optional" in capsys.readouterr().err

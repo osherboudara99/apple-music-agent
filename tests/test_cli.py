@@ -224,6 +224,7 @@ def test_service_install_without_telegram(fake_service, capsys):
 
 def test_service_install_with_telegram(fake_service, capsys):
     set_secret("telegram_bot_token", "123:abc")
+    set_secret("anthropic_api_key", "sk-test")
     assert cli.main(["service", "install"]) == 0
     assert fake_service["install"] is True
     assert "bot" in capsys.readouterr().out.lower()
@@ -268,3 +269,27 @@ def test_status_includes_service_lines(fake_service, monkeypatch, capsys):
     capsys.readouterr()
     assert cli.main(["status"]) == 0
     assert "Background snapshots: on" in capsys.readouterr().out
+
+
+def test_format_service_status_missing_program():
+    cfg = Config(timezone="UTC")
+    text = cli.format_service_status(
+        [service.JobStatus(service.SNAPSHOT_LABEL, True, True, False, 78, "/old/music-agent", False),
+         job(service.BOT_LABEL, False, False, False, None)], cfg,
+    )
+    assert "/old/music-agent" in text and "no longer exists" in text
+    assert "music-agent service install" in text
+
+
+def test_service_install_uses_keychain_secrets_only(fake_service, monkeypatch, capsys):
+    monkeypatch.setenv("MUSIC_AGENT_TELEGRAM_BOT_TOKEN", "123:from-shell")
+    set_secret("anthropic_api_key", "sk-test")
+    assert cli.main(["service", "install"]) == 0
+    assert fake_service["install"] is False  # the background bot can't see shell variables
+    assert "shell" in capsys.readouterr().out.lower()
+
+
+def test_service_install_needs_both_keys_in_keychain_for_the_bot(fake_service):
+    set_secret("telegram_bot_token", "123:abc")  # no Anthropic key stored
+    assert cli.main(["service", "install"]) == 0
+    assert fake_service["install"] is False

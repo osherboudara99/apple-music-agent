@@ -130,16 +130,20 @@ class SnapshotScheduler:
         self._thread.join(timeout=5)
 
 
-def run_bot(config: Config, store: Store, no_scheduler: bool = False) -> int:
+def run_bot(
+    config: Config, store: Store, no_scheduler: bool = False, service: bool = False
+) -> int:
+    """service=True when started by launchd: "not configured" exits 0 so KeepAlive stops."""
     from .cli import _require_key, _status_text, build_agent
 
+    not_configured = 0 if service else 2
     token = get_secret("telegram_bot_token")
     if not token:
         print(NO_TELEGRAM_MSG, file=sys.stderr)
-        return 2
+        return not_configured
     key = _require_key()
     if not key:
-        return 2
+        return not_configured
     logic = BotLogic(
         build_agent(config, store, key),
         config.telegram_allowed_user_id,

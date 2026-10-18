@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -75,14 +76,16 @@ def snapshot_job(exe: Path, config: Config, logs: Path) -> dict:
 
 
 def bot_job(exe: Path, logs: Path, keep_awake: bool) -> dict:
-    args = [str(exe), "run", "--no-scheduler"]
+    args = [str(exe), "run", "--no-scheduler", "--service"]
     if keep_awake:
         args = ["/usr/bin/caffeinate", "-s", *args]  # stay awake while on AC power
     return {
         "Label": BOT_LABEL,
         "ProgramArguments": args,
         "RunAtLoad": True,
-        "KeepAlive": True,
+        # Restart after crashes, but not after a clean exit: `run --service` exits 0 when
+        # Telegram isn't configured, so a removed token can't cause an endless restart loop.
+        "KeepAlive": {"SuccessfulExit": False},
         "ThrottleInterval": 30,
         "StandardOutPath": str(logs / "bot.out.log"),
         "StandardErrorPath": str(logs / "bot.err.log"),
@@ -161,31 +164,52 @@ class JobStatus:
     installed: bool
     loaded: bool
     running: bool
-    last_exit: int | None
+    last_exit: int | None  # negative = killed by that signal
+    program: str | None = None  # the music-agent the job runs
+    program_exists: bool = True
+
+
+_EXIT_RE = re.compile(r"last exit code = (-?\d+)")
+_SIGNAL_RE = re.compile(r"last terminating signal = .*?(\d+)\s*$")
 
 
 def _parse_print(text: str) -> tuple[bool, int | None]:
+    """launchd prints `last exit code = 0`, `= 78: EX_CONFIG`, `= (never exited)`, or
+    `last terminating signal = Killed: 9` for a job killed by a signal."""
     running: bool | None = None
     last_exit: int | None = None
-    seen_exit = False
     for line in text.splitlines():
         item = line.strip()
         if running is None and item.startswith("state = "):
             running = item == "state = running"  # first state line is the job's own
-        if not seen_exit and item.startswith("last exit code = "):
-            seen_exit = True
-            value = item.removeprefix("last exit code = ").split()[0]
-            last_exit = int(value) if value.lstrip("-").isdigit() else None
+        if last_exit is None:
+            if match := _EXIT_RE.match(item):
+                last_exit = int(match.group(1))
+            elif match := _SIGNAL_RE.match(item):
+                last_exit = -int(match.group(1))
     return bool(running), last_exit
+
+
+def _job_program(path: Path) -> str | None:
+    try:
+        args = plistlib.loads(path.read_bytes())["ProgramArguments"]
+    except (OSError, KeyError, plistlib.InvalidFileException):
+        return None
+    if args and args[0] == "/usr/bin/caffeinate":
+        args = args[2:]
+    return args[0] if args else None
 
 
 def status(runner: Runner | None = None, directory: Path | None = None) -> list[JobStatus]:
     run = runner or _default_runner
     out = []
     for label in LABELS:
-        installed = plist_path(label, directory).exists()
+        path = plist_path(label, directory)
+        installed = path.exists()
         proc = run(["/bin/launchctl", "print", f"{_domain()}/{label}"])
         loaded = proc.returncode == 0
         running, last_exit = _parse_print(proc.stdout or "") if loaded else (False, None)
-        out.append(JobStatus(label, installed, loaded, running, last_exit))
+        program = _job_program(path) if installed else None
+        exists = program is None or Path(program).exists()
+        out.append(JobStatus(label, installed, loaded, running, last_exit, program, exists))
     return out
