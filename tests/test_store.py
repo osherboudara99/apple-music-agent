@@ -103,3 +103,16 @@ def test_load_all_tracks_includes_removed_and_removal_time_is_kept(store):
             "SELECT removed_at FROM tracks WHERE persistent_id = 'A'"
         ).fetchone()[0]
     assert removed_at == "2026-09-27T01:00:00+00:00"
+
+
+def test_snapshot_time_lookup_uses_an_index(store):
+    with store.connect() as conn:
+        plan = " ".join(
+            str(row[-1])
+            for row in conn.execute(
+                "EXPLAIN QUERY PLAN SELECT MAX(taken_at) FROM snapshots "
+                "WHERE error IS NULL AND taken_at < ?",
+                ("2026-10-18T00:00:00+00:00",),
+            )
+        )
+    assert "snapshots_taken_at" in plan

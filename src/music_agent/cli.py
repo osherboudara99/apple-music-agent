@@ -167,6 +167,17 @@ def format_service_status(statuses: list[service.JobStatus], config: Config) -> 
     return f"{snap_line}\n{bot_line}"
 
 
+def _cmd_service_uninstall() -> int:
+    """Needs no config, logging or database: it's the recovery path when those are broken."""
+    try:
+        removed = service.uninstall()
+    except service.ServiceError as exc:
+        print(f"Service error: {exc}", file=sys.stderr)
+        return 1
+    print("Removed: " + ", ".join(removed) if removed else "Nothing was installed.")
+    return 0
+
+
 def _cmd_service(action: str, config: Config) -> int:
     try:
         if action == "install":
@@ -199,9 +210,7 @@ def _cmd_service(action: str, config: Config) -> int:
             print(f"Logs: {result.logs}")
             return 0
         if action == "uninstall":
-            removed = service.uninstall()
-            print("Removed: " + ", ".join(removed) if removed else "Nothing was installed.")
-            return 0
+            return _cmd_service_uninstall()
         print(format_service_status(service.status(), config))
         return 0
     except service.ServiceError as exc:
@@ -304,10 +313,14 @@ def main(argv: list[str] | None = None) -> int:
     if sys.platform != "darwin":
         print(NOT_MAC_MSG, file=sys.stderr)
         return 2
+    if args.command == "service" and args.action == "uninstall":
+        return _cmd_service_uninstall()  # the off switch must work even with a broken config
     try:
         config = load_config()
     except ConfigError as exc:
         print(f"Config error: {exc}", file=sys.stderr)
+        if args.command == "run" and args.service:
+            return 0  # under launchd: a clean exit, so KeepAlive doesn't restart-loop
         return 2
     setup_logging(args.verbose)
     trim_job_logs()

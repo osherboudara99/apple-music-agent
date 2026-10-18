@@ -341,3 +341,25 @@ def test_job_output_logs_are_trimmed(monkeypatch, isolated_home):
     text = big.read_text()
     assert big.stat().st_size <= cli.JOB_LOG_KEEP_BYTES + 200
     assert text.rstrip().endswith("LAST LINE") and text.startswith("old line")
+
+
+def _break_config(home):
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "config.toml").write_text('timezone = "UTC"\nmodle = "typo"\n')
+
+
+def test_service_uninstall_works_even_with_a_broken_config(fake_service, isolated_home, capsys):
+    _break_config(isolated_home)
+    assert cli.main(["service", "uninstall"]) == 0  # the off switch must always work
+    assert "Removed" in capsys.readouterr().out
+
+
+def test_service_job_with_broken_config_exits_cleanly(isolated_home, capsys):
+    _break_config(isolated_home)
+    assert cli.main(["run", "--no-scheduler", "--service"]) == 0  # KeepAlive won't loop
+    assert "modle" in capsys.readouterr().err
+
+
+def test_foreground_run_with_broken_config_still_fails(isolated_home):
+    _break_config(isolated_home)
+    assert cli.main(["run"]) == 2
