@@ -24,8 +24,11 @@ class ServiceError(RuntimeError):
     """A launchd job couldn't be installed or found."""
 
 
-def _default_runner(args: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(args, capture_output=True, encoding="utf-8", check=False)
+def _run_command(args: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(args, capture_output=True, encoding="utf-8", timeout=30, check=False)
+
+
+_default_runner = _run_command  # tests replace this with a refusal (see conftest)
 
 
 def agents_dir() -> Path:
@@ -107,6 +110,7 @@ def _load(job: dict, directory: Path, run: Runner) -> None:
     os.replace(tmp, path)
     proc = run(["/bin/launchctl", "bootstrap", _domain(), str(path)])
     if proc.returncode != 0:
+        path.unlink(missing_ok=True)  # an unloadable job must not reappear at next login
         detail = (proc.stderr or proc.stdout or "").strip()
         raise ServiceError(f"launchctl couldn't load {label}: {detail}")
 
@@ -145,7 +149,12 @@ def install(
     _load(snapshot_job(exe, config, logs), directory, run)
     installed, removed = [SNAPSHOT_LABEL], []
     if telegram_configured:
-        _load(bot_job(exe, logs, keep_awake), directory, run)
+        try:
+            _load(bot_job(exe, logs, keep_awake), directory, run)
+        except ServiceError as exc:
+            raise ServiceError(
+                f"Background snapshots were installed, but the Telegram bot job wasn't: {exc}"
+            ) from exc
         installed.append(BOT_LABEL)
     elif _unload(BOT_LABEL, directory, run):
         removed.append(BOT_LABEL)
@@ -167,10 +176,13 @@ class JobStatus:
     last_exit: int | None  # negative = killed by that signal
     program: str | None = None  # the music-agent the job runs
     program_exists: bool = True
+    interval_s: int | None = None  # what launchd actually uses (snapshot job)
+    error: str | None = None  # launchctl itself failed
 
 
 _EXIT_RE = re.compile(r"last exit code = (-?\d+)")
 _SIGNAL_RE = re.compile(r"last terminating signal = .*?(\d+)\s*$")
+_INTERVAL_RE = re.compile(r"run interval = (\d+) seconds")
 
 
 def _parse_print(text: str) -> tuple[bool, int | None]:
@@ -206,10 +218,20 @@ def status(runner: Runner | None = None, directory: Path | None = None) -> list[
     for label in LABELS:
         path = plist_path(label, directory)
         installed = path.exists()
-        proc = run(["/bin/launchctl", "print", f"{_domain()}/{label}"])
-        loaded = proc.returncode == 0
-        running, last_exit = _parse_print(proc.stdout or "") if loaded else (False, None)
         program = _job_program(path) if installed else None
         exists = program is None or Path(program).exists()
-        out.append(JobStatus(label, installed, loaded, running, last_exit, program, exists))
+        try:
+            proc = run(["/bin/launchctl", "print", f"{_domain()}/{label}"])
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            out.append(JobStatus(label, installed, False, False, None, program, exists, None,
+                                 str(exc)))
+            continue
+        loaded = proc.returncode == 0
+        text = proc.stdout or ""
+        running, last_exit = _parse_print(text) if loaded else (False, None)
+        interval = _INTERVAL_RE.search(text) if loaded else None
+        out.append(
+            JobStatus(label, installed, loaded, running, last_exit, program, exists,
+                      int(interval.group(1)) if interval else None)
+        )
     return out

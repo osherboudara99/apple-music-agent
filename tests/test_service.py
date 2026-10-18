@@ -104,10 +104,12 @@ DOMAIN = f"gui/{os.getuid()}"
 
 
 class FakeLaunchctl:
-    def __init__(self, loaded=(), bootstrap_rc=0):
+    def __init__(self, loaded=(), bootstrap_rc=0, fail_label=None, interval=600):
         self.loaded = set(loaded)
         self.calls = []
         self.bootstrap_rc = bootstrap_rc
+        self.fail_label = fail_label
+        self.interval = interval
 
     def __call__(self, args):
         self.calls.append(args)
@@ -123,8 +125,8 @@ class FakeLaunchctl:
             label = Path(args[3]).stem
             if label in self.loaded:
                 return subprocess.CompletedProcess(args, 5, "", "Input/output error")
-            if self.bootstrap_rc:
-                return subprocess.CompletedProcess(args, self.bootstrap_rc, "", "Bootstrap failed")
+            if self.bootstrap_rc or label == self.fail_label:
+                return subprocess.CompletedProcess(args, self.bootstrap_rc or 5, "", "Bootstrap failed")
             self.loaded.add(label)
             return subprocess.CompletedProcess(args, 0, "", "")
         if verb == "print":
@@ -133,6 +135,7 @@ class FakeLaunchctl:
                 return subprocess.CompletedProcess(args, 113, "", "Could not find service")
             text = (
                 f"{DOMAIN}/{label} = {{\n\tstate = not running\n\tlast exit code = 0\n"
+                f"\trun interval = {self.interval} seconds\n"
                 "\tendpoints = {\n\t\tstate = active\n\t}\n}\n"
             )
             return subprocess.CompletedProcess(args, 0, text, "")
@@ -211,8 +214,8 @@ def test_status(tmp_path):
     fake = FakeLaunchctl()
     service.install(Config(timezone="UTC"), False, fake, agents, exe, battery=False)
     snap, bot = service.status(fake, agents)
-    assert snap == service.JobStatus(SNAPSHOT_LABEL, True, True, False, 0, str(exe), True)
-    assert bot == service.JobStatus(BOT_LABEL, False, False, False, None, None, True)
+    assert snap == service.JobStatus(SNAPSHOT_LABEL, True, True, False, 0, str(exe), True, 600)
+    assert bot == service.JobStatus(BOT_LABEL, False, False, False, None, None, True, None)
 
 
 def test_status_flags_a_job_whose_program_is_gone(tmp_path):
@@ -242,3 +245,66 @@ def test_parse_print_real_launchd_formats(text, expected):
 def test_status_parses_running_and_never_exited():
     text = "gui/501/x = {\n\tstate = running\n\tpid = 4242\n\tlast exit code = (never exited)\n}\n"
     assert service._parse_print(text) == (True, None)
+
+
+def test_failed_bot_load_rolls_back_and_says_snapshots_are_on(tmp_path):
+    agents = tmp_path / "agents"
+    fake = FakeLaunchctl(fail_label=BOT_LABEL)
+    with pytest.raises(service.ServiceError) as info:
+        service.install(Config(timezone="UTC"), True, fake, agents, EXE, battery=False)
+    assert "Background snapshots were installed" in str(info.value)
+    assert not (agents / f"{BOT_LABEL}.plist").exists()  # won't load at next login
+    assert SNAPSHOT_LABEL in fake.loaded and (agents / f"{SNAPSHOT_LABEL}.plist").exists()
+
+
+def test_failed_snapshot_load_leaves_no_job_file(tmp_path):
+    agents = tmp_path / "agents"
+    with pytest.raises(service.ServiceError):
+        service.install(
+            Config(timezone="UTC"), False, FakeLaunchctl(bootstrap_rc=5), agents, EXE,
+            battery=False,
+        )
+    assert not (agents / f"{SNAPSHOT_LABEL}.plist").exists()
+
+
+def test_install_writes_nothing_when_executable_is_missing(monkeypatch, tmp_path):
+    def missing():
+        raise service.ServiceError("Couldn't find the music-agent executable.")
+
+    monkeypatch.setattr(service, "executable_path", missing)
+    agents = tmp_path / "agents"
+    with pytest.raises(service.ServiceError, match="executable"):
+        service.install(Config(timezone="UTC"), False, FakeLaunchctl(), agents, battery=False)
+    assert not agents.exists()
+
+
+def test_status_reads_the_installed_interval(tmp_path):
+    exe = tmp_path / "music-agent"
+    exe.write_text("")
+    fake = FakeLaunchctl(interval=1800)
+    service.install(Config(timezone="UTC"), False, fake, tmp_path / "a", exe, battery=False)
+    assert service.status(fake, tmp_path / "a")[0].interval_s == 1800
+
+
+def test_status_survives_launchctl_errors(tmp_path):
+    def broken(args):
+        raise OSError("launchctl not found")
+
+    snap, bot = service.status(broken, tmp_path)
+    assert snap.loaded is False and snap.error == "launchctl not found"
+    assert bot.error == "launchctl not found"
+
+
+def test_default_runner_has_a_timeout(monkeypatch):
+    import music_agent.service as mod
+
+    seen = {}
+
+    def fake_run(args, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(mod.subprocess, "run", fake_run)
+    real = mod._run_command
+    real(["/bin/true"])
+    assert seen["timeout"] > 0 and seen["check"] is False

@@ -24,3 +24,14 @@ def fake_keyring(monkeypatch):
         keyring, "set_password", lambda service, name, value: secrets.__setitem__((service, name), value)
     )
     return secrets
+
+
+@pytest.fixture(autouse=True)
+def no_real_launchctl(monkeypatch):
+    """Safety net: no test may reach the real launchctl/pmset through the default runner."""
+    from music_agent import service
+
+    def refuse(args):
+        raise AssertionError(f"test tried to run {args[0]} for real")
+
+    monkeypatch.setattr(service, "_default_runner", refuse)
