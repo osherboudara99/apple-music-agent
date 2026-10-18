@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
     duration_ms INTEGER NOT NULL,
     error TEXT
 );
+CREATE INDEX IF NOT EXISTS snapshots_taken_at ON snapshots(taken_at);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS conversations (
     id INTEGER PRIMARY KEY,
